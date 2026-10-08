@@ -11,7 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class ApiConfig {
   static const String _envBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://saku.43.156.113.106.sslip.io',
+    defaultValue: 'http://43.156.113.106:9000',
   );
 
   /// Base URL backend. Bisa di-override via `--dart-define=API_BASE_URL=...`.
@@ -84,7 +84,7 @@ class ApiClient {
   }
 
   /// Kirim request dengan retry untuk error transient (DNS/jaringan/TLS).
-  /// sslip.io DNS sesekali blip → retry 3x dengan backoff kecil.
+  /// Retry untuk error transient (DNS/jaringan/TLS bisa sesekali blip).
   Future<http.Response> _sendWithRetry(
     Future<http.Response> Function() send,
   ) async {
