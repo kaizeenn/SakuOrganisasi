@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -81,6 +83,37 @@ class ApiClient {
     return h;
   }
 
+  /// Kirim request dengan retry untuk error transient (DNS/jaringan/TLS).
+  /// sslip.io DNS sesekali blip → retry 3x dengan backoff kecil.
+  Future<http.Response> _sendWithRetry(
+    Future<http.Response> Function() send,
+  ) async {
+    const maxAttempts = 3;
+    const delays = [
+      Duration(milliseconds: 900),
+      Duration(milliseconds: 1800),
+    ];
+    for (int attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        return await send().timeout(const Duration(seconds: 15));
+      } on SocketException {
+        // retry
+      } on HandshakeException {
+        // retry
+      } on TimeoutException {
+        // retry
+      } on http.ClientException {
+        // retry (membungkus socket/DNS error)
+      }
+      if (attempt < maxAttempts - 1) {
+        await Future.delayed(delays[attempt]);
+      }
+    }
+    throw ApiException(
+      'Tidak dapat terhubung ke server. Periksa koneksi internet lalu coba lagi.',
+    );
+  }
+
   Future<Map<String, dynamic>> _request(
     String method,
     String path, {
@@ -92,24 +125,23 @@ class ApiClient {
     );
     final token = await getToken();
 
-    http.Response res;
     final headers = _headers(extra: null, token: token);
-    switch (method) {
-      case 'GET':
-        res = await http.get(uri, headers: headers);
-        break;
-      case 'POST':
-        res = await http.post(uri, headers: headers, body: body != null ? jsonEncode(body) : null);
-        break;
-      case 'PATCH':
-        res = await http.patch(uri, headers: headers, body: body != null ? jsonEncode(body) : null);
-        break;
-      case 'DELETE':
-        res = await http.delete(uri, headers: headers);
-        break;
-      default:
-        throw ApiException('Method HTTP tidak didukung: $method');
+    Future<http.Response> send() async {
+      switch (method) {
+        case 'GET':
+          return http.get(uri, headers: headers);
+        case 'POST':
+          return http.post(uri, headers: headers, body: body != null ? jsonEncode(body) : null);
+        case 'PATCH':
+          return http.patch(uri, headers: headers, body: body != null ? jsonEncode(body) : null);
+        case 'DELETE':
+          return http.delete(uri, headers: headers);
+        default:
+          throw ApiException('Method HTTP tidak didukung: $method');
+      }
     }
+
+    final http.Response res = await _sendWithRetry(send);
 
     Map<String, dynamic> json;
     try {
