@@ -11,7 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class ApiConfig {
   static const String _envBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://43.156.113.106:9000',
+    defaultValue: 'http://43.156.113.106',
   );
 
   /// Base URL backend. Bisa di-override via `--dart-define=API_BASE_URL=...`.
