@@ -4,8 +4,12 @@ import 'package:intl/intl.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../providers/dashboard_providers.dart';
+import '../theme/app_theme.dart';
+import '../widgets/ui_kit.dart';
+import '../utils/icon_helper.dart';
 import 'report_screen.dart';
 import 'settings_screen.dart';
+import 'account_detail_screen.dart';
 
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
@@ -15,437 +19,534 @@ class DashboardScreen extends ConsumerWidget {
     final summaryAsync = ref.watch(dashboardSummaryProvider);
     final expenseAsync = ref.watch(expenseBreakdownProvider);
     final accountsAsync = ref.watch(accountsProvider);
+    final p = context.palette;
 
-    final currencyFormatter = NumberFormat.currency(
+    final fmt = NumberFormat.currency(
       locale: 'id_ID',
       symbol: 'Rp ',
       decimalDigits: 0,
     );
 
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-    final textColor = Theme.of(context).colorScheme.onSurface;
+    final hour = DateTime.now().hour;
+    final greeting = hour < 11
+        ? 'Selamat pagi'
+        : hour < 15
+        ? 'Selamat siang'
+        : hour < 19
+        ? 'Selamat sore'
+        : 'Selamat malam';
 
     return Scaffold(
-      // backgroundColor handled by theme
-      appBar: AppBar(
-        title: const Text(
-          'Dashboard',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        elevation: 0,
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.print, color: Colors.blue),
-            tooltip: 'Laporan PDF',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ReportScreen()),
-              );
-            },
-          ),
-          IconButton(
-            icon: Icon(
-              Icons.settings,
-              color: isDarkMode ? Colors.white70 : Colors.grey,
-            ),
-            tooltip: 'Pengaturan',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SettingsScreen()),
-              );
-            },
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header Row
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Ringkasan Keuangan',
-                  style: TextStyle(
-                    color: textColor,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-
-            // Card 1: Total Saldo
-            summaryAsync.when(
-              data: (summary) =>
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(20.0),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).cardColor,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.05),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      body: SafeArea(
+        bottom: false,
+        child: RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(dashboardSummaryProvider);
+            ref.invalidate(expenseBreakdownProvider);
+            ref.invalidate(accountsProvider);
+          },
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 100),
+            children: [
+              // Top bar
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Total Saldo',
-                              style: TextStyle(
-                                color: Colors.grey,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              currencyFormatter.format(summary.totalBalance),
-                              style: TextStyle(
-                                color: textColor,
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
+                        Text(
+                          greeting,
+                          style: context.texts.bodySmall?.copyWith(
+                            color: p.textMuted,
+                          ),
                         ),
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.withValues(alpha: 0.1),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.account_balance_wallet,
-                            color: Colors.blue,
-                            size: 28,
-                          ),
+                        Text(
+                          'Ringkasan Keuangan',
+                          style: context.texts.headlineSmall,
                         ),
                       ],
                     ),
-                  ).animate().fade().slideY(
-                    duration: 400.ms,
-                    curve: Curves.easeOut,
                   ),
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (err, stack) => Text('Error: $err'),
-            ),
-
-            const SizedBox(height: 16),
-
-            // Income / Expense Row
-            summaryAsync.when(
-              data: (summary) =>
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildStatCard(
-                          label: 'Pemasukan',
-                          value: summary.totalIncome,
-                          icon: Icons.arrow_downward,
-                          backgroundColor: isDarkMode
-                              ? const Color(0xFF064E3B)
-                              : const Color(
-                                  0xFFDCFCE7,
-                                ), // Dark Green vs Light Green
-                          textColor: isDarkMode
-                              ? const Color(0xFF34D399)
-                              : const Color(0xFF166534),
-                          formatter: currencyFormatter,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: _buildStatCard(
-                          label: 'Pengeluaran',
-                          value: summary.totalExpense,
-                          icon: Icons.arrow_upward,
-                          backgroundColor: isDarkMode
-                              ? const Color(0xFF7F1D1D)
-                              : const Color(
-                                  0xFFFEE2E2,
-                                ), // Dark Red vs Light Red
-                          textColor: isDarkMode
-                              ? const Color(0xFFF87171)
-                              : const Color(0xFF991B1B),
-                          formatter: currencyFormatter,
-                        ),
-                      ),
-                    ],
-                  ).animate().fade().slideY(
-                    delay: 100.ms,
-                    duration: 400.ms,
-                    curve: Curves.easeOut,
+                  _IconAction(
+                    icon: Icons.ios_share_rounded,
+                    tooltip: 'Laporan',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const ReportScreen()),
+                    ),
                   ),
-              loading: () => const SizedBox.shrink(),
-              error: (err, stack) => const SizedBox.shrink(),
-            ),
-
-            const SizedBox(height: 24),
-
-            // Pie Chart Section
-            Text(
-              'Detail Pengeluaran',
-              style: TextStyle(
-                color: textColor,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              height: 250,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).cardColor,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
+                  const SizedBox(width: 8),
+                  _IconAction(
+                    icon: Icons.settings_outlined,
+                    tooltip: 'Pengaturan',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                    ),
                   ),
                 ],
               ),
-              child: expenseAsync.when(
-                data: (expenses) {
-                  if (expenses.isEmpty) {
-                    return const Center(
-                      child: Text('Belum ada data pengeluaran.'),
-                    );
-                  }
+              const SizedBox(height: 20),
 
-                  return Row(
+              // Hero balance
+              summaryAsync.when(
+                data: (s) => HeroPanel(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: PieChart(
-                          PieChartData(
-                            sectionsSpace: 2,
-                            centerSpaceRadius: 40,
-                            sections: expenses.map((e) {
-                              final index = expenses.indexOf(e);
-                              final colors = [
-                                Colors.blue,
-                                Colors.red,
-                                Colors.green,
-                                Colors.orange,
-                                Colors.purple,
-                                Colors.teal,
-                              ];
-                              return PieChartSectionData(
-                                color: colors[index % colors.length],
-                                value: e.totalAmount.toDouble(),
-                                title:
-                                    '${(e.totalAmount / expenses.fold<int>(0, (sum, item) => sum + item.totalAmount) * 100).toStringAsFixed(0)}%',
-                                radius: 60,
-                                titleStyle: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                ),
-                              );
-                            }).toList(),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(
+                              Icons.account_balance_wallet_rounded,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            'Total Saldo',
+                            style: context.texts.titleSmall?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.9),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          fmt.format(s.totalBalance),
+                          style: context.texts.displaySmall?.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.8,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      // Legend
-                      Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: expenses.map((e) {
-                          final index = expenses.indexOf(e);
-                          final colors = [
-                            Colors.blue,
-                            Colors.red,
-                            Colors.green,
-                            Colors.orange,
-                            Colors.purple,
-                            Colors.teal,
-                          ];
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _HeroStat(
+                              label: 'Pemasukan',
+                              value: fmt.format(s.totalIncome),
+                              icon: Icons.south_west_rounded,
+                            ),
+                          ),
+                          Container(
+                            width: 1,
+                            height: 34,
+                            color: Colors.white.withValues(alpha: 0.2),
+                          ),
+                          Expanded(
+                            child: _HeroStat(
+                              label: 'Pengeluaran',
+                              value: fmt.format(s.totalExpense),
+                              icon: Icons.north_east_rounded,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ).animate().fade(duration: 450.ms).slideY(
+                  begin: 0.08,
+                  end: 0,
+                  duration: 500.ms,
+                  curve: Curves.easeOutCubic,
+                ),
+                loading: () => const _LoadingCard(height: 190),
+                error: (e, _) => _ErrorCard(message: '$e'),
+              ),
+
+              const SizedBox(height: 26),
+
+              // Expense chart
+              const SectionHeader(
+                title: 'Detail Pengeluaran',
+                subtitle: 'Distribusi per kategori',
+              ),
+              AppCard(
+                padding: const EdgeInsets.all(18),
+                child: expenseAsync.when(
+                  data: (expenses) {
+                    if (expenses.isEmpty) {
+                      return const SizedBox(
+                        height: 140,
+                        child: Center(
+                          child: Text('Belum ada data pengeluaran.'),
+                        ),
+                      );
+                    }
+                    final total = expenses.fold<int>(
+                      0,
+                      (sum, item) => sum + item.totalAmount,
+                    );
+                    final colors = _chartColors(p);
+
+                    return Column(
+                      children: [
+                        SizedBox(
+                          height: 190,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              PieChart(
+                                PieChartData(
+                                  sectionsSpace: 3,
+                                  centerSpaceRadius: 58,
+                                  startDegreeOffset: -90,
+                                  sections: List.generate(expenses.length, (i) {
+                                    final e = expenses[i];
+                                    final pct = total == 0
+                                        ? 0
+                                        : (e.totalAmount / total * 100);
+                                    return PieChartSectionData(
+                                      color: colors[i % colors.length],
+                                      value: e.totalAmount.toDouble(),
+                                      title: pct >= 8
+                                          ? '${pct.toStringAsFixed(0)}%'
+                                          : '',
+                                      radius: 34,
+                                      titleStyle: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    );
+                                  }),
+                                ),
+                                duration: const Duration(milliseconds: 700),
+                                curve: Curves.easeOutCubic,
+                              ),
+                              Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'Total',
+                                    style: context.texts.bodySmall?.copyWith(
+                                      color: p.textMuted,
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    width: 106,
+                                    child: FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      child: Text(
+                                        fmt.format(total),
+                                        style: context.texts.titleMedium
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        ...List.generate(expenses.length, (i) {
+                          final e = expenses[i];
+                          final pct = total == 0
+                              ? 0.0
+                              : e.totalAmount / total * 100;
                           return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            padding: const EdgeInsets.symmetric(vertical: 5),
                             child: Row(
                               children: [
                                 Container(
-                                  width: 12,
-                                  height: 12,
-                                  color: colors[index % colors.length],
+                                  width: 10,
+                                  height: 10,
+                                  decoration: BoxDecoration(
+                                    color: colors[i % colors.length],
+                                    shape: BoxShape.circle,
+                                  ),
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    e.categoryName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: context.texts.bodyMedium,
+                                  ),
+                                ),
                                 Text(
-                                  e.categoryName,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: textColor,
-                                  ), // Dynamic Text
+                                  '${pct.toStringAsFixed(0)}%',
+                                  style: context.texts.labelSmall?.copyWith(
+                                    color: p.textMuted,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  fmt.format(e.totalAmount),
+                                  style: context.texts.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ],
                             ),
                           );
-                        }).toList(),
-                      ),
-                    ],
-                  );
-                },
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (err, _) => Center(child: Text('Error: $err')),
-              ),
-            ).animate().fade().slideY(
-              delay: 200.ms,
-              duration: 400.ms,
-              curve: Curves.easeOut,
-            ),
-            const SizedBox(height: 24),
+                        }),
+                      ],
+                    );
+                  },
+                  loading: () => const _LoadingCard(height: 190),
+                  error: (e, _) => _ErrorCard(message: '$e'),
+                ),
+              ).animate().fade(delay: 120.ms, duration: 450.ms),
 
-            // Account List Section
-            Text(
-              'Daftar Akun',
-              style: TextStyle(
-                color: textColor,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+              const SizedBox(height: 26),
+
+              // Accounts
+              SectionHeader(
+                title: 'Daftar Akun',
+                subtitle: 'Saldo per rekening & dompet',
+                action: accountsAsync.maybeWhen(
+                  data: (a) => Text(
+                    '${a.length} akun',
+                    style: context.texts.labelSmall?.copyWith(
+                      color: p.textMuted,
+                    ),
+                  ),
+                  orElse: () => const SizedBox.shrink(),
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 120,
-              child: accountsAsync.when(
+              accountsAsync.when(
                 data: (accounts) {
-                  if (accounts.isEmpty) return const Text('Belum ada akun.');
-                  return ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: accounts.length,
-                    itemBuilder: (context, index) {
-                      final account = accounts[index];
-                      return Container(
-                        width: 160,
-                        margin: const EdgeInsets.only(right: 12, bottom: 8),
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).cardColor,
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.05),
-                              blurRadius: 4,
-                              offset: const Offset(0, 2),
+                  if (accounts.isEmpty) {
+                    return AppCard(
+                      child: EmptyState(
+                        icon: Icons.account_balance_wallet_outlined,
+                        title: 'Belum ada akun',
+                        message: 'Tambahkan rekening atau dompet dulu.',
+                      ),
+                    );
+                  }
+                  return SizedBox(
+                    height: 132,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.only(right: 4),
+                      itemCount: accounts.length,
+                      separatorBuilder: (_, _) => const SizedBox(width: 14),
+                      itemBuilder: (context, index) {
+                        final account = accounts[index];
+                        final tint = _chartColors(p)[index % 6];
+                        return AppCard(
+                          margin: const EdgeInsets.only(bottom: 4),
+                          padding: const EdgeInsets.all(16),
+                          radius: AppRadius.lg,
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  AccountDetailScreen(account: account),
                             ),
-                          ],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            CircleAvatar(
-                              radius: 16,
-                              backgroundColor: Colors.blue.withValues(
-                                alpha: 0.1,
-                              ),
-                              child: const Icon(
-                                Icons.account_balance_wallet,
-                                size: 18,
-                                color: Colors.blue,
-                              ),
+                          ),
+                          child: SizedBox(
+                            width: 158,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(9),
+                                      decoration: BoxDecoration(
+                                        color: tint.withValues(alpha: 0.12),
+                                        borderRadius: BorderRadius.circular(11),
+                                      ),
+                                      child: Icon(
+                                        IconHelper.getIcon(account.iconKey),
+                                        color: tint,
+                                        size: 18,
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    Text(
+                                      account.type,
+                                      style: context.texts.labelSmall?.copyWith(
+                                        color: p.textMuted,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const Spacer(),
+                                Text(
+                                  account.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: context.texts.titleSmall,
+                                ),
+                                const SizedBox(height: 2),
+                                FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(
+                                    fmt.format(account.currentBalance),
+                                    style: context.texts.bodyMedium?.copyWith(
+                                      fontWeight: FontWeight.w800,
+                                      color: p.brand,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                            const Spacer(),
-                            Text(
-                              account.name,
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                                color: textColor,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              currencyFormatter.format(account.currentBalance),
-                              style: const TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ).animate().fade().slideX(
-                        delay: (300 + (index * 100)).ms,
-                        duration: 400.ms,
-                        curve: Curves.easeOut,
-                      );
-                    },
+                          ),
+                        )
+                            .animate()
+                            .fade(delay: (200 + index * 70).ms, duration: 400.ms)
+                            .slideX(
+                              begin: 0.1,
+                              end: 0,
+                              delay: (200 + index * 70).ms,
+                              duration: 400.ms,
+                            );
+                      },
+                    ),
                   );
                 },
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (err, _) => Center(child: Text('Error: $err')),
+                loading: () => const _LoadingCard(height: 132),
+                error: (e, _) => _ErrorCard(message: '$e'),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildStatCard({
-    required String label,
-    required int value,
-    required IconData icon,
-    required Color backgroundColor,
-    required Color textColor,
-    required NumberFormat formatter,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(16.0),
-      decoration: BoxDecoration(
-        color: backgroundColor,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: textColor, size: 20),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: TextStyle(
-                  color: textColor,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
+  static List<Color> _chartColors(AppPalette p) => [
+    p.brand,
+    p.accent,
+    p.income,
+    p.transfer,
+    const Color(0xFFEC4899),
+    const Color(0xFF8B5CF6),
+    const Color(0xFF14B8A6),
+  ];
+}
+
+class _HeroStat extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+
+  const _HeroStat({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 13, color: Colors.white.withValues(alpha: 0.85)),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: context.texts.labelSmall?.copyWith(
+                color: Colors.white.withValues(alpha: 0.85),
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            formatter.format(value),
-            style: TextStyle(
-              color: textColor,
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            value,
+            style: context.texts.titleMedium?.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
             ),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class _IconAction extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  const _IconAction({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(AppRadius.sm),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              border: Border.all(color: p.border),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
+            ),
+            child: Icon(icon, size: 19, color: p.textMuted),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LoadingCard extends StatelessWidget {
+  final double height;
+  const _LoadingCard({required this.height});
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      child: SizedBox(
+        height: height,
+        child: const Center(child: CircularProgressIndicator()),
+      ),
+    );
+  }
+}
+
+class _ErrorCard extends StatelessWidget {
+  final String message;
+  const _ErrorCard({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      child: Row(
+        children: [
+          Icon(Icons.error_outline, color: context.palette.expense),
+          const SizedBox(width: 10),
+          Expanded(child: Text('Terjadi kesalahan: $message')),
         ],
       ),
     );

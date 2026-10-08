@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import '../providers/dashboard_providers.dart';
 import '../providers/theme_provider.dart';
-import '../services/backup_service.dart';
+import '../services/api_client.dart';
+import '../theme/app_theme.dart';
 import '../utils/app_constants.dart';
+import '../widgets/ui_kit.dart';
+import 'auth_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -16,13 +19,12 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _isLoading = false;
-
-  // Profile State
   final TextEditingController _orgNameController = TextEditingController();
   String _selectedCurrency = 'IDR';
   bool _isProfileLoading = true;
-  String _appVersion = 'Loading...';
+  String _appVersion = '...';
   bool _biometricEnabled = false;
+  Map<String, dynamic>? _user;
 
   @override
   void initState() {
@@ -33,6 +35,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final packageInfo = await PackageInfo.fromPlatform();
+    final user = await AuthService.currentUser();
 
     if (mounted) {
       setState(() {
@@ -41,6 +44,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         _selectedCurrency = prefs.getString('currency') ?? 'IDR';
         _biometricEnabled = prefs.getBool('biometric_enabled') ?? false;
         _appVersion = packageInfo.version;
+        _user = user;
         _isProfileLoading = false;
       });
     }
@@ -48,209 +52,213 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Future<void> _saveProfileSettings() async {
     if (_orgNameController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nama Organisasi tidak boleh kosong')),
-      );
+      _snack('Nama organisasi tidak boleh kosong');
       return;
     }
-
     setState(() => _isLoading = true);
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('org_name', _orgNameController.text);
       await prefs.setString('currency', _selectedCurrency);
-
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Pengaturan tersimpan!')));
-      }
+      if (mounted) _snack('Pengaturan tersimpan');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Gagal menyimpan: $e')));
-      }
+      if (mounted) _snack('Gagal menyimpan: $e');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
+  void _snack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final themeMode = ref.watch(themeProvider);
+    final p = context.palette;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Pengaturan')),
       body: _isProfileLoading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
               children: [
-                _buildSectionHeader('Profil Organisasi'),
-                _buildProfileSection(),
-                const SizedBox(height: 20),
-
-                _buildSectionHeader('Tampilan'),
-                Card(
-                  child: ListTile(
-                    leading: const Icon(
-                      Icons.brightness_6,
-                      color: Colors.indigo,
-                    ),
-                    title: const Text('Tema Aplikasi'),
-                    subtitle: Text(_getThemeName(themeMode)),
-                    onTap: _showThemeDialog,
+                // Profile header
+                AppCard(
+                  padding: const EdgeInsets.all(18),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 54,
+                        height: 54,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(colors: p.heroGradient),
+                          borderRadius: BorderRadius.circular(AppRadius.md),
+                        ),
+                        child: const Icon(
+                          Icons.person_rounded,
+                          color: Colors.white,
+                          size: 28,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              (_user?['name'] ?? _orgNameController.text)
+                                  .toString(),
+                              style: context.texts.titleMedium,
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '@${_user?['username'] ?? '-'}',
+                              style: context.texts.bodySmall?.copyWith(
+                                color: p.textMuted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      AppBadge(
+                        text: 'Aktif',
+                        color: p.income,
+                        icon: Icons.verified_rounded,
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 24),
 
-                _buildSectionHeader('Keamanan'),
-                Card(
-                  child: SwitchListTile(
-                    secondary: const Icon(
-                      Icons.fingerprint,
-                      color: Colors.purple,
-                    ),
-                    title: const Text('Keamanan Biometrik'),
-                    subtitle: const Text(
-                      'Gunakan sidik jari/wajah untuk masuk',
-                    ),
+                const SectionHeader(title: 'Profil Organisasi'),
+                AppCard(
+                  padding: const EdgeInsets.all(18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextField(
+                        controller: _orgNameController,
+                        decoration: const InputDecoration(
+                          labelText: 'Nama Organisasi',
+                          prefixIcon: Icon(Icons.business_rounded),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      DropdownButtonFormField<String>(
+                        initialValue: _selectedCurrency,
+                        decoration: const InputDecoration(
+                          labelText: 'Mata Uang',
+                          prefixIcon: Icon(Icons.payments_rounded),
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                            value: 'IDR',
+                            child: Text('IDR (Rupiah)'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'USD',
+                            child: Text('USD (Dollar)'),
+                          ),
+                        ],
+                        onChanged: (val) {
+                          if (val != null) {
+                            setState(() => _selectedCurrency = val);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: _isLoading ? null : _saveProfileSettings,
+                        icon: const Icon(Icons.save_rounded, size: 18),
+                        label: const Text('Simpan Profil'),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                const SectionHeader(title: 'Tampilan'),
+                _SettingTile(
+                  icon: Icons.brightness_6_rounded,
+                  color: p.brand,
+                  title: 'Tema Aplikasi',
+                  subtitle: _getThemeName(themeMode),
+                  onTap: _showThemeDialog,
+                ),
+                const SizedBox(height: 24),
+
+                const SectionHeader(title: 'Keamanan'),
+                _SettingTile(
+                  icon: Icons.fingerprint_rounded,
+                  color: p.accent,
+                  title: 'Keamanan Biometrik',
+                  subtitle: 'Gunakan sidik jari/wajah untuk masuk',
+                  trailing: Switch(
                     value: _biometricEnabled,
                     onChanged: (val) async {
                       final prefs = await SharedPreferences.getInstance();
                       await prefs.setBool('biometric_enabled', val);
                       if (!mounted) return;
                       setState(() => _biometricEnabled = val);
-                      if (val) {
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Keamanan Biometrik Diaktifkan'),
-                            ),
-                          );
-                        }
-                      }
                     },
                   ),
                 ),
-                const SizedBox(height: 20),
-
-                _buildSectionHeader('Data'),
-                Card(
-                  child: Column(
-                    children: [
-                      ListTile(
-                        leading: const Icon(
-                          Icons.cloud_upload,
-                          color: Colors.blue,
-                        ),
-                        title: const Text('Backup Data (Terenkripsi)'),
-                        subtitle: const Text('Simpan data aman ke file'),
-                        onTap: _backupData,
-                      ),
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: const Icon(
-                          Icons.cloud_download,
-                          color: Colors.orange,
-                        ),
-                        title: const Text('Restore Data'),
-                        subtitle: const Text(
-                          'Pulihkan dari backup terenkripsi atau file JSON lama',
-                        ),
-                        onTap: _restoreData,
-                      ),
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: const Icon(
-                          Icons.delete_forever,
-                          color: Colors.red,
-                        ),
-                        title: const Text('Reset Aplikasi'),
-                        subtitle: const Text('Hapus semua data permanen'),
-                        onTap: _resetApp,
-                      ),
-                    ],
-                  ),
+                const SizedBox(height: 12),
+                _SettingTile(
+                  icon: Icons.logout_rounded,
+                  color: p.expense,
+                  title: 'Keluar Akun',
+                  subtitle: 'Akhiri sesi login saat ini',
+                  onTap: _logout,
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 24),
 
-                _buildSectionHeader('Tentang'),
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.info, color: Colors.teal),
-                    title: const Text('Versi Aplikasi'),
-                    subtitle: Text('v$_appVersion'),
-                  ),
+                const SectionHeader(title: 'Tentang'),
+                _SettingTile(
+                  icon: Icons.info_rounded,
+                  color: p.transfer,
+                  title: 'Versi Aplikasi',
+                  subtitle: 'Saku Organisasi v$_appVersion',
                 ),
-              ],
+              ].animate().fade(duration: 380.ms).slideY(
+                begin: 0.03,
+                end: 0,
+                duration: 380.ms,
+              ),
             ),
     );
   }
 
-  Widget _buildSectionHeader(String title) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8, left: 4),
-      child: Text(
-        title,
-        style: TextStyle(
-          fontSize: 18,
-          fontWeight: FontWeight.bold,
-          color: Theme.of(context).colorScheme.primary, // Dynamic color
-        ),
+  Future<void> _logout() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Keluar Akun?'),
+        content: const Text('Anda perlu login kembali untuk mengakses data.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: context.palette.expense,
+              minimumSize: const Size(0, 44),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Keluar'),
+          ),
+        ],
       ),
     );
-  }
-
-  Widget _buildProfileSection() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              controller: _orgNameController,
-              decoration: const InputDecoration(
-                labelText: 'Nama Organisasi',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.business),
-              ),
-            ),
-            const SizedBox(height: 16),
-            InputDecorator(
-              decoration: const InputDecoration(
-                labelText: 'Mata Uang',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.monetization_on),
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _selectedCurrency,
-                  isDense: true,
-                  items: const [
-                    DropdownMenuItem(value: 'IDR', child: Text('IDR (Rupiah)')),
-                    DropdownMenuItem(value: 'USD', child: Text('USD (Dollar)')),
-                  ],
-                  onChanged: (val) {
-                    if (val != null) setState(() => _selectedCurrency = val);
-                  },
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              onPressed: _isLoading ? null : _saveProfileSettings,
-              icon: const Icon(Icons.save),
-              label: const Text('Simpan Profil'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-              ),
-            ),
-          ],
-        ),
-      ),
+    if (confirm != true) return;
+    await AuthService.logout();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AuthScreen()),
+      (route) => false,
     );
   }
 
@@ -268,148 +276,94 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   void _showThemeDialog() {
     showDialog(
       context: context,
-      builder: (context) {
-        return SimpleDialog(
-          title: const Text('Pilih Tema'),
-          children: [
-            _themeOption(ThemeMode.system, 'Ikuti Sistem'),
-            _themeOption(ThemeMode.light, 'Mode Terang'),
-            _themeOption(ThemeMode.dark, 'Mode Gelap'),
-          ],
-        );
-      },
+      builder: (context) => SimpleDialog(
+        title: const Text('Pilih Tema'),
+        children: [
+          _themeOption(ThemeMode.system, 'Ikuti Sistem', Icons.brightness_auto_rounded),
+          _themeOption(ThemeMode.light, 'Mode Terang', Icons.light_mode_rounded),
+          _themeOption(ThemeMode.dark, 'Mode Gelap', Icons.dark_mode_rounded),
+        ],
+      ),
     );
   }
 
-  Widget _themeOption(ThemeMode mode, String label) {
+  Widget _themeOption(ThemeMode mode, String label, IconData icon) {
+    final selected = ref.watch(themeProvider) == mode;
     return SimpleDialogOption(
       onPressed: () {
         ref.read(themeProvider.notifier).setTheme(mode);
         Navigator.pop(context);
       },
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Text(label),
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Icon(icon, size: 20),
+            const SizedBox(width: 12),
+            Text(label, style: context.texts.bodyLarge),
+            const Spacer(),
+            if (selected)
+              Icon(Icons.check_rounded, color: context.palette.brand, size: 20),
+          ],
+        ),
       ),
     );
   }
 
-  Future<void> _performAction(Future<void> Function() action) async {
-    if (_isLoading) return;
-    setState(() => _isLoading = true);
-    try {
-      await action();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
+}
 
-  Future<void> _backupData() async {
-    await _performAction(() async {
-      final db = ref.read(transactionRepositoryProvider).getDatabase();
-      final service = BackupService(db);
-      final msg = await service.createBackup();
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(msg)));
-      }
-    });
-  }
+class _SettingTile extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final VoidCallback? onTap;
+  final Widget? trailing;
 
-  Future<void> _restoreData() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Restore Data?'),
-        content: const Text(
-          'PERINGATAN: Semua data saat ini akan DIHAPUS dan digantikan dengan data dari backup.\n\nLanjutkan?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Batal'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
+  const _SettingTile({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    this.onTap,
+    this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return AppCard(
+      onTap: onTap,
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
             ),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Restore'),
+            child: Icon(icon, color: color, size: 20),
           ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: context.texts.titleSmall),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: context.texts.bodySmall?.copyWith(color: p.textMuted),
+                ),
+              ],
+            ),
+          ),
+          trailing ??
+              Icon(Icons.chevron_right_rounded, color: p.textMuted, size: 20),
         ],
       ),
     );
-
-    if (confirm == true) {
-      await _performAction(() async {
-        final db = ref.read(transactionRepositoryProvider).getDatabase();
-        final service = BackupService(db);
-        await service.restoreBackup();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Restore Berhasil! Silakan restart aplikasi.'),
-            ),
-          );
-          ref.invalidate(dashboardSummaryProvider);
-          ref.invalidate(recentTransactionsProvider);
-        }
-      });
-    }
-  }
-
-  Future<void> _resetApp() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Reset Aplikasi?'),
-        content: const Text(
-          'PERINGATAN: Semua data akan DIHAPUS PERMANEN.\n\nLanjutkan?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Batal'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Hapus Semua'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm == true) {
-      await _performAction(() async {
-        final db = ref.read(transactionRepositoryProvider).getDatabase();
-        await db.transaction(() async {
-          await db.delete(db.cashLogs).go();
-          await db.delete(db.transactions).go();
-          await db.delete(db.events).go();
-          await db.delete(db.members).go();
-          await db.delete(db.accounts).go();
-          await db.delete(db.categories).go();
-        });
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Data berhasil dihapus.')),
-          );
-          ref.invalidate(dashboardSummaryProvider);
-        }
-      });
-    }
   }
 }

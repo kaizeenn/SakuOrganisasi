@@ -1,8 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:local_auth/local_auth.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../services/api_client.dart';
+import '../theme/app_theme.dart';
+import '../widgets/ui_kit.dart';
 import 'main_screen.dart';
 
+/// Layar login (username + password) yang terhubung ke backend JWT.
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
 
@@ -11,125 +17,269 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
-  final LocalAuthentication auth = LocalAuthentication();
-  String _authorized = 'Not Authorized';
+  final _formKey = GlobalKey<FormState>();
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+
+  bool _obscurePassword = true;
+  bool _loading = false;
+  String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _authenticate();
+    _tryAutoLogin();
   }
 
-  Future<void> _authenticate() async {
-    bool authenticated = false;
-    try {
-      setState(() {
-        _authorized = 'Authenticating';
-      });
+  Future<void> _tryAutoLogin() async {
+    if (!mounted) return;
+    final user = await AuthService.currentUser();
+    if (!mounted) return;
+    if (user != null) _goToMainScreen();
+  }
 
-      // Correct API for local_auth ^2.1.0+ / ^3.0.0
-      authenticated = await auth.authenticate(
-        localizedReason: 'Gunakan sidik jari atau PIN untuk masuk',
-        options: const AuthenticationOptions(
-          stickyAuth: true,
-          biometricOnly: false, // Allows PIN/Pattern backup
-          useErrorDialogs: true,
-        ),
+  void _goToMainScreen() {
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (context) => const MainScreen()),
+    );
+  }
+
+  Future<void> _submitLogin() async {
+    FocusScope.of(context).unfocus();
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() {
+      _loading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      await AuthService.login(
+        login: _usernameController.text.trim(),
+        password: _passwordController.text,
       );
+      if (!mounted) return;
+      _goToMainScreen();
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _errorMessage = e.message);
     } on PlatformException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: ${e.message}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        setState(() {
-          _authorized = 'Not Authorized';
-        });
-      }
-      return;
-    }
-
-    if (!mounted) return;
-
-    if (authenticated) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => const MainScreen()),
-      );
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Otentikasi dibatalkan'),
-            backgroundColor: Colors.orange,
-          ),
+        setState(
+          () => _errorMessage = 'Tidak dapat terhubung: ${e.message ?? e.code}',
         );
       }
-      setState(() {
-        _authorized = 'Not Authorized';
-      });
+    } catch (e) {
+      if (mounted) setState(() => _errorMessage = 'Terjadi kesalahan: $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: Colors.blue.withValues(alpha: 0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.fingerprint,
-                  size: 80,
-                  color: Colors.blue,
-                ),
-              ),
-              const SizedBox(height: 32),
-              const Text(
-                'Keamanan Aktif',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                _authorized == 'Not Authorized' ||
-                        _authorized == 'Authenticating'
-                    ? 'Verifikasi identitas Anda untuk melanjutkan'
-                    : _authorized,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.grey, fontSize: 16),
-              ),
-              const SizedBox(height: 48),
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
 
-              if (_authorized != 'Authenticating')
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: _authenticate,
-                    icon: const Icon(Icons.lock_open),
-                    label: const Text('Buka dengan Keamanan HP'),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+
+    return Scaffold(
+      body: AuroraBackground(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Brand mark
+                  Container(
+                        width: 78,
+                        height: 78,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: p.heroGradient,
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(
+                              color: p.brand.withValues(alpha: 0.45),
+                              blurRadius: 28,
+                              offset: const Offset(0, 12),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.account_balance_wallet_rounded,
+                          color: Colors.white,
+                          size: 38,
+                        ),
+                      )
+                      .animate()
+                      .fade(duration: 450.ms)
+                      .scale(
+                        begin: const Offset(0.8, 0.8),
+                        end: const Offset(1, 1),
+                        curve: Curves.easeOutBack,
+                        duration: 600.ms,
                       ),
-                      textStyle: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
+                  const SizedBox(height: 22),
+                  Text(
+                    'Saku Organisasi',
+                    style: context.texts.displaySmall?.copyWith(
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                ),
-            ],
+                  const SizedBox(height: 6),
+                  Text(
+                    'Kelola kas organisasi dengan rapi & aman',
+                    textAlign: TextAlign.center,
+                    style: context.texts.bodyMedium?.copyWith(
+                      color: p.textMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 30),
+
+                  // Form card
+                  AppCard(
+                        padding: const EdgeInsets.all(22),
+                        radius: AppRadius.xl,
+                        child: Form(
+                          key: _formKey,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Text(
+                                'Masuk',
+                                style: context.texts.titleLarge,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Gunakan akun bendahara Anda',
+                                style: context.texts.bodySmall?.copyWith(
+                                  color: p.textMuted,
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              TextFormField(
+                                controller: _usernameController,
+                                textInputAction: TextInputAction.next,
+                                autofillHints: const [AutofillHints.username],
+                                decoration: const InputDecoration(
+                                  labelText: 'Username',
+                                  prefixIcon: Icon(Icons.person_outline),
+                                ),
+                                validator: (v) {
+                                  final s = v?.trim() ?? '';
+                                  if (s.isEmpty) return 'Username wajib diisi';
+                                  return null;
+                                },
+                              ),
+                              const SizedBox(height: 14),
+                              TextFormField(
+                                controller: _passwordController,
+                                obscureText: _obscurePassword,
+                                textInputAction: TextInputAction.done,
+                                autofillHints: const [AutofillHints.password],
+                                onFieldSubmitted: (_) => _submitLogin(),
+                                decoration: InputDecoration(
+                                  labelText: 'Password',
+                                  prefixIcon: const Icon(Icons.lock_outline),
+                                  suffixIcon: IconButton(
+                                    tooltip: _obscurePassword
+                                        ? 'Tampilkan'
+                                        : 'Sembunyikan',
+                                    icon: Icon(
+                                      _obscurePassword
+                                          ? Icons.visibility_off_outlined
+                                          : Icons.visibility_outlined,
+                                    ),
+                                    onPressed: () => setState(
+                                      () => _obscurePassword = !_obscurePassword,
+                                    ),
+                                  ),
+                                ),
+                                validator: (v) =>
+                                    (v == null || v.isEmpty) ? 'Password wajib diisi' : null,
+                              ),
+
+                              AnimatedSize(
+                                duration: const Duration(milliseconds: 220),
+                                child: _errorMessage == null
+                                    ? const SizedBox(width: double.infinity)
+                                    : Padding(
+                                        padding: const EdgeInsets.only(top: 14),
+                                        child: Container(
+                                          padding: const EdgeInsets.all(12),
+                                          decoration: BoxDecoration(
+                                            color: p.expense.withValues(alpha: 0.10),
+                                            borderRadius: BorderRadius.circular(
+                                              AppRadius.sm,
+                                            ),
+                                            border: Border.all(
+                                              color: p.expense.withValues(alpha: 0.3),
+                                            ),
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.error_outline,
+                                                color: p.expense,
+                                                size: 18,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  _errorMessage!,
+                                                  style: context.texts.bodySmall
+                                                      ?.copyWith(color: p.expense),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                              ),
+
+                              const SizedBox(height: 22),
+                              FilledButton(
+                                onPressed: _loading ? null : _submitLogin,
+                                child: _loading
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(Icons.login_rounded, size: 19),
+                                          SizedBox(width: 8),
+                                          Text('Masuk'),
+                                        ],
+                                      ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                      .animate()
+                      .fade(delay: 120.ms, duration: 450.ms)
+                      .slideY(begin: 0.06, end: 0, delay: 120.ms, duration: 450.ms),
+
+
+                ],
+              ),
+            ),
           ),
         ),
       ),

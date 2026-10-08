@@ -3,62 +3,54 @@ import '../database/database.dart';
 import '../repositories/transaction_repository.dart';
 import '../models/dashboard_summary.dart';
 
-// 1. Database Provider
+// AppDatabase dipertahankan HANYA untuk fitur backup/restore lokal di Settings.
+// Data utama aplikasi mengalir via API backend (MySQL) — semua user melihat data sama.
 final databaseProvider = Provider<AppDatabase>((ref) {
   return AppDatabase();
 });
 
-// 2. TransactionRepository Provider
+// 2. TransactionRepository Provider (API-backed)
 final transactionRepositoryProvider = Provider<TransactionRepository>((ref) {
-  final db = ref.watch(databaseProvider);
-  return TransactionRepository(db);
+  return TransactionRepository();
 });
 
 // 3. DashboardSummary Provider
-final dashboardSummaryProvider = StreamProvider<DashboardSummary>((ref) {
-  final repository = ref.watch(transactionRepositoryProvider);
-  return repository.getDashboardSummary();
+final dashboardSummaryProvider = FutureProvider<DashboardSummary>((ref) {
+  return ref.watch(transactionRepositoryProvider).getDashboardSummary();
 });
 
 // 4. Recent Transactions Provider
-final recentTransactionsProvider = StreamProvider<List<TransactionWithDetails>>(
-  (ref) {
-    final repository = ref.watch(transactionRepositoryProvider);
-    return repository.watchRecentTransactions();
-  },
-);
+final recentTransactionsProvider =
+    FutureProvider<List<TransactionWithDetails>>((ref) {
+  return ref.watch(transactionRepositoryProvider).watchRecentTransactions();
+});
 
 // 5. Accounts Provider (Global)
-final accountsProvider = StreamProvider<List<Account>>((ref) {
-  final db = ref.watch(databaseProvider);
-  return db.select(db.accounts).watch();
+final accountsProvider = FutureProvider<List<Account>>((ref) {
+  return ref.watch(transactionRepositoryProvider).watchAccounts();
 });
 
 // 6. Categories Provider (Global)
-final categoriesProvider = StreamProvider<List<Category>>((ref) {
-  final db = ref.watch(databaseProvider);
-  return db.select(db.categories).watch();
+final categoriesProvider = FutureProvider<List<Category>>((ref) {
+  return ref.watch(transactionRepositoryProvider).watchCategories();
 });
 
 // 7. Expense Breakdown Provider
-final expenseBreakdownProvider = StreamProvider<List<CategoryExpense>>((ref) {
-  final repository = ref.watch(transactionRepositoryProvider);
-  return repository.watchExpenseBreakdown();
+final expenseBreakdownProvider = FutureProvider<List<CategoryExpense>>((ref) {
+  return ref.watch(transactionRepositoryProvider).watchExpenseBreakdown();
 });
 
 // 8. Events With Spending Provider
-final eventsWithSpendingProvider = StreamProvider<List<EventWithSpending>>((
-  ref,
-) {
-  final repository = ref.watch(transactionRepositoryProvider);
-  return repository.watchEventsWithSpending();
+final eventsWithSpendingProvider =
+    FutureProvider<List<EventWithSpending>>((ref) {
+  return ref.watch(transactionRepositoryProvider).watchEventsWithSpending();
 });
 
 // 9. Active Events Provider
-final activeEventsProvider = StreamProvider<List<Event>>((ref) {
-  final repository = ref.watch(transactionRepositoryProvider);
-  return repository.watchActiveEvents();
+final activeEventsProvider = FutureProvider<List<Event>>((ref) {
+  return ref.watch(transactionRepositoryProvider).watchActiveEvents();
 });
+
 // 10. Filter State Provider
 final transactionFilterProvider = StateProvider<TransactionFilter>((ref) {
   return TransactionFilter();
@@ -98,20 +90,66 @@ class TransactionFilter {
 
 // 11. Custom Filtered Transactions Provider
 final filteredTransactionsProvider =
-    StreamProvider<List<TransactionWithDetails>>((ref) {
-      final repository = ref.watch(transactionRepositoryProvider);
-      final filter = ref.watch(transactionFilterProvider);
-
-      return repository.watchTransactionsWithFilter(
-        startDate: filter.startDate,
-        endDate: filter.endDate,
-        categoryId: filter.categoryId,
-        accountId: filter.accountId,
-        type: filter.type,
-      );
-    });
-// 12. Cash Periods Provider
-final cashPeriodsProvider = StreamProvider<List<CashPeriod>>((ref) {
+    FutureProvider<List<TransactionWithDetails>>((ref) {
   final repository = ref.watch(transactionRepositoryProvider);
-  return repository.watchCashPeriods();
+  final filter = ref.watch(transactionFilterProvider);
+
+  return repository.watchTransactionsWithFilter(
+    startDate: filter.startDate,
+    endDate: filter.endDate,
+    categoryId: filter.categoryId,
+    accountId: filter.accountId,
+    type: filter.type,
+  );
 });
+
+// 12. Cash Periods Provider
+final cashPeriodsProvider = FutureProvider<List<CashPeriod>>((ref) {
+  return ref.watch(transactionRepositoryProvider).watchCashPeriods();
+});
+
+// 13. Family providers (detail screens)
+final transactionsByAccountProvider = FutureProvider.family<
+    List<TransactionWithDetails>, int>((ref, accountId) {
+  return ref
+      .watch(transactionRepositoryProvider)
+      .watchTransactionsByAccount(accountId);
+});
+
+final transactionsByEventProvider = FutureProvider.family<
+    List<TransactionWithDetails>, int>((ref, eventId) {
+  return ref
+      .watch(transactionRepositoryProvider)
+      .watchTransactionsByEvent(eventId);
+});
+
+final eventByIdProvider = FutureProvider.family<Event, int>((ref, id) {
+  return ref.watch(transactionRepositoryProvider).watchEventById(id);
+});
+
+final cashChecklistProvider =
+    FutureProvider.family<CashChecklist, int>((ref, periodId) {
+  return ref.watch(transactionRepositoryProvider).getChecklist(periodId);
+});
+
+final collectedCashProvider =
+    FutureProvider.family<int, int>((ref, periodId) {
+  return ref
+      .watch(transactionRepositoryProvider)
+      .watchCollectedCashForPeriod(periodId);
+});
+
+/// Invalidate semua provider yang berkaitan dengan data keuangan agar di-fetch ulang
+/// dari server setelah mutasi (create/update/delete). Panggil dari screen setelah
+/// operasi berhasil.
+void invalidateAllData(WidgetRef ref) {
+  ref.invalidate(dashboardSummaryProvider);
+  ref.invalidate(recentTransactionsProvider);
+  ref.invalidate(accountsProvider);
+  ref.invalidate(categoriesProvider);
+  ref.invalidate(expenseBreakdownProvider);
+  ref.invalidate(eventsWithSpendingProvider);
+  ref.invalidate(activeEventsProvider);
+  ref.invalidate(filteredTransactionsProvider);
+  ref.invalidate(cashPeriodsProvider);
+}

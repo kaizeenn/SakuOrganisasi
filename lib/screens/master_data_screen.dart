@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:drift/drift.dart' as drift;
-import '../database/database.dart';
 import '../providers/dashboard_providers.dart';
+import '../theme/app_theme.dart';
 import '../utils/icon_helper.dart';
-import '../screens/account_detail_screen.dart';
+import '../widgets/ui_kit.dart';
+import '../database/database.dart';
+import 'account_detail_screen.dart';
 
 class MasterDataScreen extends ConsumerWidget {
   final int initialIndex;
@@ -13,17 +15,44 @@ class MasterDataScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final p = context.palette;
     return DefaultTabController(
       length: 2,
       initialIndex: initialIndex,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Kelola Data'),
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'Akun Keuangan', icon: Icon(Icons.wallet)),
-              Tab(text: 'Kategori', icon: Icon(Icons.category)),
-            ],
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(56),
+            child: Container(
+              margin: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+              padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(
+                color: p.surfaceAlt,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: TabBar(
+                indicator: BoxDecoration(
+                  color: Theme.of(context).cardColor,
+                  borderRadius: BorderRadius.circular(999),
+                  boxShadow: [
+                    BoxShadow(
+                      color: p.shadow,
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                indicatorSize: TabBarIndicatorSize.tab,
+                dividerColor: Colors.transparent,
+                labelColor: p.brand,
+                unselectedLabelColor: p.textMuted,
+                tabs: const [
+                  Tab(height: 40, text: 'Akun Keuangan'),
+                  Tab(height: 40, text: 'Kategori'),
+                ],
+              ),
+            ),
           ),
         ),
         body: const TabBarView(children: [_AccountsTab(), _CategoriesTab()]),
@@ -38,71 +67,101 @@ class _AccountsTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final repo = ref.watch(transactionRepositoryProvider);
+    final p = context.palette;
 
-    return StreamBuilder<List<Account>>(
-      stream: repo.watchAccounts(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final accounts = snapshot.data!;
-
-        return Scaffold(
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: () => _showAccountDialog(context, ref),
-            label: const Text('Tambah Akun'),
-            icon: const Icon(Icons.add),
-          ),
-          body: ListView.builder(
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _showAccountDialog(context, ref),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Akun'),
+      ),
+      body: ref.watch(accountsProvider).when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, s) => EmptyState(
+          icon: Icons.error_outline,
+          title: 'Gagal memuat',
+          message: '$e',
+        ),
+        data: (accounts) {
+          if (accounts.isEmpty) {
+            return EmptyState(
+              icon: Icons.account_balance_wallet_outlined,
+              title: 'Belum ada akun',
+              message: 'Tambahkan rekening atau dompet pertama Anda.',
+              actionLabel: 'Tambah Akun',
+              onAction: () => _showAccountDialog(context, ref),
+            );
+          }
+          return ListView.builder(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
             itemCount: accounts.length,
-            padding: const EdgeInsets.only(bottom: 80),
             itemBuilder: (context, index) {
               final account = accounts[index];
-              return Card(
-                child: ListTile(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => AccountDetailScreen(account: account),
-                      ),
-                    );
-                  },
-                  leading: CircleAvatar(
-                    backgroundColor: Colors.blue.shade100,
-                    child: Icon(
-                      IconHelper.getIcon(account.iconKey),
-                      color: Colors.blue,
-                    ),
-                  ),
-                  title: Text(account.name),
-                  subtitle: Text(account.type),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.edit, color: Colors.orange),
-                        onPressed: () =>
-                            _showAccountDialog(context, ref, account: account),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete, color: Colors.red),
-                        onPressed: () => _deleteAccount(
-                          context,
-                          ref,
-                          account,
-                          accounts,
-                        ),
-                      ),
-                    ],
+              return AppCard(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(14),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => AccountDetailScreen(account: account),
                   ),
                 ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        color: p.brandSoft,
+                        borderRadius: BorderRadius.circular(AppRadius.md),
+                      ),
+                      child: Icon(
+                        IconHelper.getIcon(account.iconKey),
+                        color: p.brand,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(account.name, style: context.texts.titleSmall),
+                          const SizedBox(height: 2),
+                          Text(
+                            account.type,
+                            style: context.texts.bodySmall?.copyWith(
+                              color: p.textMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _MiniAction(
+                      icon: Icons.edit_outlined,
+                      color: p.accent,
+                      onTap: () =>
+                          _showAccountDialog(context, ref, account: account),
+                    ),
+                    const SizedBox(width: 6),
+                    _MiniAction(
+                      icon: Icons.delete_outline_rounded,
+                      color: p.expense,
+                      onTap: () => _deleteAccount(context, ref, account),
+                    ),
+                  ],
+                ),
+              ).animate().fade(delay: (index * 50).ms).slideY(
+                begin: 0.05,
+                end: 0,
+                delay: (index * 50).ms,
+                duration: 340.ms,
               );
             },
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -110,88 +169,39 @@ class _AccountsTab extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     Account account,
-    List<Account> allAccounts,
   ) async {
-    final replacementCandidates = allAccounts
-        .where((a) => a.id != account.id)
-        .toList();
-
-    if (replacementCandidates.isEmpty) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Minimal harus ada 1 akun lain sebagai pengganti.'),
-          ),
-        );
-      }
-      return;
-    }
-
-    int selectedReplacementId = replacementCandidates.first.id;
-
+    final p = context.palette;
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('Hapus Akun & Pindah Transaksi'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Semua histori transaksi dari akun "${account.name}" akan dipindah ke akun pengganti.',
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<int>(
-                initialValue: selectedReplacementId,
-                decoration: const InputDecoration(
-                  labelText: 'Akun Pengganti',
-                  border: OutlineInputBorder(),
-                ),
-                items: replacementCandidates
-                    .map(
-                      (a) => DropdownMenuItem<int>(
-                        value: a.id,
-                        child: Text(a.name),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() => selectedReplacementId = value);
-                  }
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Batal'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Pindah & Hapus'),
-            ),
-          ],
+      builder: (context) => AlertDialog(
+        title: const Text('Hapus Akun'),
+        content: Text(
+          'Hapus "${account.name}"? Akun yang masih memiliki transaksi tidak bisa dihapus.',
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: p.expense,
+              minimumSize: const Size(0, 44),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Hapus'),
+          ),
+        ],
       ),
     );
 
     if (confirm == true) {
       try {
-        await ref
-            .read(transactionRepositoryProvider)
-            .deleteAccountWithReplacement(
-              accountId: account.id,
-              replacementAccountId: selectedReplacementId,
-            );
+        await ref.read(transactionRepositoryProvider).deleteAccount(account.id);
+        invalidateAllData(ref);
         if (context.mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(
-            const SnackBar(content: Text('Akun dihapus & transaksi dipindahkan')),
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Akun dihapus')),
           );
         }
       } catch (e) {
@@ -211,11 +221,12 @@ class _AccountsTab extends ConsumerWidget {
   }) async {
     final isEdit = account != null;
     final nameCtrl = TextEditingController(text: account?.name ?? '');
-    final typeCtrl = TextEditingController(text: account?.type ?? 'Bank');
+    String selectedType = account?.type ?? 'Bank';
     final balanceCtrl = TextEditingController(
       text: (account?.currentBalance ?? 0).toString(),
     );
     String selectedIcon = account?.iconKey ?? 'default';
+    final p = context.palette;
 
     await showDialog(
       context: context,
@@ -227,68 +238,61 @@ class _AccountsTab extends ConsumerWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Icon Picker Trigger
                   InkWell(
                     onTap: () async {
                       final icon = await _showIconPicker(context);
-                      if (icon != null) {
-                        setState(() => selectedIcon = icon);
-                      }
+                      if (icon != null) setState(() => selectedIcon = icon);
                     },
-                    child: CircleAvatar(
-                      radius: 30,
-                      backgroundColor: Colors.grey.shade200,
-                      child: Icon(IconHelper.getIcon(selectedIcon), size: 30),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Pilih Ikon',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: nameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Nama Akun',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  InputDecorator(
-                    decoration: const InputDecoration(
-                      labelText: 'Tipe',
-                      border: OutlineInputBorder(),
-                    ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: typeCtrl.text,
-                        isDense: true,
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'Cash',
-                            child: Text('Cash (Tunai)'),
-                          ),
-                          DropdownMenuItem(value: 'Bank', child: Text('Bank')),
-                          DropdownMenuItem(
-                            value: 'E-Wallet',
-                            child: Text('E-Wallet'),
-                          ),
-                        ],
-                        onChanged: (v) {
-                          if (v != null) setState(() => typeCtrl.text = v);
-                        },
+                    borderRadius: BorderRadius.circular(999),
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: p.brandSoft,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        IconHelper.getIcon(selectedIcon),
+                        size: 30,
+                        color: p.brand,
                       ),
                     ),
                   ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Ketuk untuk ganti ikon',
+                    style: context.texts.labelSmall?.copyWith(
+                      color: p.textMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: 'Nama Akun'),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedType,
+                    decoration: const InputDecoration(labelText: 'Tipe'),
+                    items: const [
+                      DropdownMenuItem(value: 'Cash', child: Text('Tunai')),
+                      DropdownMenuItem(value: 'Bank', child: Text('Bank')),
+                      DropdownMenuItem(
+                        value: 'E-Wallet',
+                        child: Text('E-Wallet'),
+                      ),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) setState(() => selectedType = v);
+                    },
+                  ),
                   if (!isEdit) ...[
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                     TextField(
                       controller: balanceCtrl,
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(
                         labelText: 'Saldo Awal',
-                        border: OutlineInputBorder(),
+                        prefixText: 'Rp ',
                       ),
                     ),
                   ],
@@ -300,31 +304,28 @@ class _AccountsTab extends ConsumerWidget {
                 onPressed: () => Navigator.pop(context),
                 child: const Text('Batal'),
               ),
-              ElevatedButton(
+              FilledButton(
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
                 onPressed: () async {
                   if (nameCtrl.text.isEmpty) return;
-
-                  final entry = AccountsCompanion(
-                    name: drift.Value(nameCtrl.text),
-                    type: drift.Value(typeCtrl.text),
-                    iconKey: drift.Value(selectedIcon),
-                    // Only update balance logic if needed, usually we don't edit Initial Balance for existing
-                    initialBalance: isEdit
-                        ? drift.Value.absent()
-                        : drift.Value(int.tryParse(balanceCtrl.text) ?? 0),
-                    currentBalance: isEdit
-                        ? drift.Value.absent()
-                        : drift.Value(int.tryParse(balanceCtrl.text) ?? 0),
-                  );
-
                   final repo = ref.read(transactionRepositoryProvider);
                   if (isEdit) {
                     await repo.updateAccount(
-                      entry.copyWith(id: drift.Value(account.id)),
+                      id: account.id,
+                      name: nameCtrl.text,
+                      type: selectedType,
+                      iconKey: selectedIcon,
                     );
                   } else {
-                    await repo.createAccount(entry);
+                    await repo.createAccount(
+                      name: nameCtrl.text,
+                      type: selectedType,
+                      initialBalance:
+                          int.tryParse(balanceCtrl.text) ?? 0,
+                      iconKey: selectedIcon,
+                    );
                   }
+                  invalidateAllData(ref);
                   if (context.mounted) Navigator.pop(context);
                 },
                 child: const Text('Simpan'),
@@ -343,91 +344,101 @@ class _CategoriesTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final repo = ref.watch(transactionRepositoryProvider);
+    final p = context.palette;
 
-    return StreamBuilder<List<Category>>(
-      stream: repo.watchCategories(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final categories = snapshot.data!;
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _showCategoryDialog(context, ref),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Kategori'),
+      ),
+      body: ref.watch(categoriesProvider).when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, s) => EmptyState(
+          icon: Icons.error_outline,
+          title: 'Gagal memuat',
+          message: '$e',
+        ),
+        data: (categories) {
+          final income = categories.where((c) => c.type == 'Income').toList();
+          final expense = categories.where((c) => c.type == 'Expense').toList();
 
-        // Group by Type (Income/Expense)
-        final income = categories.where((c) => c.type == 'Income').toList();
-        final expense = categories.where((c) => c.type == 'Expense').toList();
+          if (categories.isEmpty) {
+            return EmptyState(
+              icon: Icons.category_outlined,
+              title: 'Belum ada kategori',
+              message: 'Tambahkan kategori pemasukan atau pengeluaran.',
+              actionLabel: 'Tambah Kategori',
+              onAction: () => _showCategoryDialog(context, ref),
+            );
+          }
 
-        return Scaffold(
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: () => _showCategoryDialog(context, ref),
-            label: const Text('Tambah Kategori'),
-            icon: const Icon(Icons.add),
-            backgroundColor: Colors.orange,
-          ),
-          body: ListView(
-            padding: const EdgeInsets.only(bottom: 80),
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
             children: [
               if (income.isNotEmpty) ...[
-                const Padding(
-                  padding: EdgeInsets.all(16.0),
-                  child: Text(
-                    'Pemasukan',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green,
-                    ),
-                  ),
+                SectionHeader(
+                  title: 'Pemasukan',
+                  subtitle: '${income.length} kategori',
                 ),
-                ...income.map((c) => _buildTile(context, ref, c)),
+                ...income.map((c) => _tile(context, ref, c, p.income)),
               ],
               if (expense.isNotEmpty) ...[
-                const Padding(
-                  padding: EdgeInsets.all(16.0),
-                  child: Text(
-                    'Pengeluaran',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.red,
-                    ),
-                  ),
+                const SizedBox(height: 12),
+                SectionHeader(
+                  title: 'Pengeluaran',
+                  subtitle: '${expense.length} kategori',
                 ),
-                ...expense.map((c) => _buildTile(context, ref, c)),
+                ...expense.map((c) => _tile(context, ref, c, p.expense)),
               ],
             ],
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
-  Widget _buildTile(BuildContext context, WidgetRef ref, Category category) {
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: category.type == 'Income'
-              ? Colors.green.shade100
-              : Colors.red.shade100,
-          child: Icon(
-            IconHelper.getIcon(category.iconKey),
-            color: category.type == 'Income' ? Colors.green : Colors.red,
+  Widget _tile(
+    BuildContext context,
+    WidgetRef ref,
+    Category category,
+    Color color,
+  ) {
+    final p = context.palette;
+    return AppCard(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(13),
+      radius: AppRadius.md,
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
+            ),
+            child:
+                Icon(IconHelper.getIcon(category.iconKey), color: color, size: 20),
           ),
-        ),
-        title: Text(category.name),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.edit, color: Colors.orange),
-              onPressed: () =>
-                  _showCategoryDialog(context, ref, category: category),
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete, color: Colors.red),
-              onPressed: () => _deleteCategory(context, ref, category.id),
-            ),
-          ],
-        ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Text(category.name, style: context.texts.titleSmall),
+          ),
+          _MiniAction(
+            icon: Icons.edit_outlined,
+            color: p.accent,
+            onTap: () =>
+                _showCategoryDialog(context, ref, category: category),
+          ),
+          const SizedBox(width: 6),
+          _MiniAction(
+            icon: Icons.delete_outline_rounded,
+            color: p.expense,
+            onTap: () => _deleteCategory(context, ref, category.id),
+          ),
+        ],
       ),
     );
   }
@@ -437,6 +448,7 @@ class _CategoriesTab extends ConsumerWidget {
     WidgetRef ref,
     int id,
   ) async {
+    final p = context.palette;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -449,8 +461,11 @@ class _CategoriesTab extends ConsumerWidget {
             onPressed: () => Navigator.pop(context, false),
             child: const Text('Batal'),
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: p.expense,
+              minimumSize: const Size(0, 44),
+            ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Hapus'),
           ),
@@ -461,6 +476,7 @@ class _CategoriesTab extends ConsumerWidget {
     if (confirm == true) {
       try {
         await ref.read(transactionRepositoryProvider).deleteCategory(id);
+        invalidateAllData(ref);
         if (context.mounted) {
           ScaffoldMessenger.of(
             context,
@@ -483,9 +499,9 @@ class _CategoriesTab extends ConsumerWidget {
   }) async {
     final isEdit = category != null;
     final nameCtrl = TextEditingController(text: category?.name ?? '');
-    // Default to Expense for new categories unless specified
     String selectedType = category?.type ?? 'Expense';
     String selectedIcon = category?.iconKey ?? 'default';
+    final p = context.palette;
 
     await showDialog(
       context: context,
@@ -502,50 +518,51 @@ class _CategoriesTab extends ConsumerWidget {
                       final icon = await _showIconPicker(context);
                       if (icon != null) setState(() => selectedIcon = icon);
                     },
-                    child: CircleAvatar(
-                      radius: 30,
-                      backgroundColor: Colors.grey.shade200,
-                      child: Icon(IconHelper.getIcon(selectedIcon), size: 30),
+                    borderRadius: BorderRadius.circular(999),
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: p.brandSoft,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        IconHelper.getIcon(selectedIcon),
+                        size: 30,
+                        color: p.brand,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Pilih Ikon',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Ketuk untuk ganti ikon',
+                    style: context.texts.labelSmall?.copyWith(
+                      color: p.textMuted,
+                    ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 18),
                   TextField(
                     controller: nameCtrl,
                     decoration: const InputDecoration(
                       labelText: 'Nama Kategori',
-                      border: OutlineInputBorder(),
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  InputDecorator(
-                    decoration: const InputDecoration(
-                      labelText: 'Tipe',
-                      border: OutlineInputBorder(),
-                    ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: selectedType,
-                        isDense: true,
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'Income',
-                            child: Text('Pemasukan'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Expense',
-                            child: Text('Pengeluaran'),
-                          ),
-                        ],
-                        onChanged: (v) {
-                          if (v != null) setState(() => selectedType = v);
-                        },
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedType,
+                    decoration: const InputDecoration(labelText: 'Tipe'),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'Income',
+                        child: Text('Pemasukan'),
                       ),
-                    ),
+                      DropdownMenuItem(
+                        value: 'Expense',
+                        child: Text('Pengeluaran'),
+                      ),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) setState(() => selectedType = v);
+                    },
                   ),
                 ],
               ),
@@ -555,24 +572,26 @@ class _CategoriesTab extends ConsumerWidget {
                 onPressed: () => Navigator.pop(context),
                 child: const Text('Batal'),
               ),
-              ElevatedButton(
+              FilledButton(
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
                 onPressed: () async {
                   if (nameCtrl.text.isEmpty) return;
-
-                  final entry = CategoriesCompanion(
-                    name: drift.Value(nameCtrl.text),
-                    type: drift.Value(selectedType),
-                    iconKey: drift.Value(selectedIcon),
-                  );
-
                   final repo = ref.read(transactionRepositoryProvider);
                   if (isEdit) {
                     await repo.updateCategory(
-                      entry.copyWith(id: drift.Value(category.id)),
+                      id: category.id,
+                      name: nameCtrl.text,
+                      type: selectedType,
+                      iconKey: selectedIcon,
                     );
                   } else {
-                    await repo.createCategory(entry);
+                    await repo.createCategory(
+                      name: nameCtrl.text,
+                      type: selectedType,
+                      iconKey: selectedIcon,
+                    );
                   }
+                  invalidateAllData(ref);
                   if (context.mounted) Navigator.pop(context);
                 },
                 child: const Text('Simpan'),
@@ -585,8 +604,36 @@ class _CategoriesTab extends ConsumerWidget {
   }
 }
 
-// --- ICON PICKER DIALOG ---
+class _MiniAction extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  const _MiniAction({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: color.withValues(alpha: 0.10),
+      borderRadius: BorderRadius.circular(AppRadius.sm),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        child: Padding(
+          padding: const EdgeInsets.all(9),
+          child: Icon(icon, size: 17, color: color),
+        ),
+      ),
+    );
+  }
+}
+
+// --- ICON PICKER ---
 Future<String?> _showIconPicker(BuildContext context) async {
+  final p = context.palette;
   return showDialog<String>(
     context: context,
     builder: (context) => AlertDialog(
@@ -601,12 +648,13 @@ Future<String?> _showIconPicker(BuildContext context) async {
           children: IconHelper.iconMap.entries.map((entry) {
             return InkWell(
               onTap: () => Navigator.pop(context, entry.key),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(8),
+                  color: p.surfaceAlt,
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
                 ),
-                child: Icon(entry.value, color: Colors.blueGrey),
+                child: Icon(entry.value, color: p.brand, size: 20),
               ),
             );
           }).toList(),

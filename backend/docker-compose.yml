@@ -1,0 +1,18 @@
+services:
+  backend:
+    build: .
+    container_name: saku-backend
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    env_file:
+      - .env
+    networks:
+      - portofolio-net
+    mem_limit: 384m
+    memswap_limit: 512m
+
+networks:
+  portofolio-net:
+    external: true
+    name: portofolio_portofolio-net

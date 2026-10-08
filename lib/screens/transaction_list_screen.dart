@@ -4,6 +4,9 @@ import 'package:intl/intl.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../providers/dashboard_providers.dart';
 import '../repositories/transaction_repository.dart';
+import '../theme/app_theme.dart';
+import '../widgets/ui_kit.dart';
+import '../widgets/transaction_item_card.dart';
 import 'add_transaction_screen.dart';
 
 class TransactionListScreen extends ConsumerStatefulWidget {
@@ -14,415 +17,398 @@ class TransactionListScreen extends ConsumerStatefulWidget {
       _TransactionListScreenState();
 }
 
-class _TransactionListScreenState extends ConsumerState<TransactionListScreen> {
+class _TransactionListScreenState extends ConsumerState<TransactionListScreen>
+    with AutomaticKeepAliveClientMixin {
   DateTime _selectedMonth = DateTime.now();
 
   @override
+  bool get wantKeepAlive => true;
+
+  @override
   Widget build(BuildContext context) {
-    // 1. Watch Filtered Transactions (from global provider)
+    super.build(context);
     final transactionsAsync = ref.watch(filteredTransactionsProvider);
-    final currencyFormatter = NumberFormat.currency(
+    final fmt = NumberFormat.currency(
       locale: 'id_ID',
       symbol: 'Rp ',
       decimalDigits: 0,
     );
 
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-
-    // Filter local data by Month/Year
-    // Note: If global filter restricts this, it will show empty.
-    // This is expected behavior for "Advanced Filter" combination.
-
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
           children: [
-            IconButton(
-              icon: const Icon(Icons.chevron_left),
-              onPressed: _prevMonth,
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Transaksi',
+                      style: context.texts.headlineSmall,
+                    ),
+                  ),
+                  _MonthStepper(
+                    label: DateFormat(
+                      'MMM yyyy',
+                      'id_ID',
+                    ).format(_selectedMonth),
+                    onPrev: _prevMonth,
+                    onNext: _nextMonth,
+                  ),
+                  const SizedBox(width: 8),
+                  _RoundIconButton(
+                    icon: Icons.filter_list_rounded,
+                    onTap: () => _showFilterSheet(context, ref),
+                  ),
+                ],
+              ),
             ),
-            Text(
-              DateFormat('MMMM yyyy', 'id_ID').format(_selectedMonth),
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-            ),
-            IconButton(
-              icon: const Icon(Icons.chevron_right),
-              onPressed: _nextMonth,
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragEnd: (details) {
+                  final v = details.primaryVelocity ?? 0;
+                  if (v > 0) {
+                    _prevMonth();
+                  } else if (v < 0) {
+                    _nextMonth();
+                  }
+                },
+                child: transactionsAsync.when(
+                  data: (allTransactions) {
+                    final monthTransactions = allTransactions.where((t) {
+                      final d = t.transaction.transactionDate;
+                      return d.year == _selectedMonth.year &&
+                          d.month == _selectedMonth.month;
+                    }).toList();
+
+                    int monthIncome = 0, monthExpense = 0;
+                    for (final t in monthTransactions) {
+                      if (t.transaction.type == 'Income') {
+                        monthIncome += t.transaction.amount;
+                      } else if (t.transaction.type == 'Expense') {
+                        monthExpense += t.transaction.amount;
+                      }
+                    }
+
+                    Widget content;
+                    if (monthTransactions.isEmpty) {
+                      content = EmptyState(
+                        key: ValueKey(
+                          'empty-${_selectedMonth.year}-${_selectedMonth.month}',
+                        ),
+                        icon: Icons.receipt_long_outlined,
+                        title: 'Tidak ada transaksi',
+                        message:
+                            'Belum ada catatan untuk bulan ini. Tekan tombol + untuk menambah.',
+                      );
+                    } else {
+                      final grouped = _groupTransactionsByDay(monthTransactions);
+                      final sortedDays = grouped.keys.toList()
+                        ..sort((a, b) => b.compareTo(a));
+
+                      content = ListView(
+                        key: ValueKey(
+                          'list-${_selectedMonth.year}-${_selectedMonth.month}',
+                        ),
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
+                        children: [
+                          _MonthSummary(
+                            income: monthIncome,
+                            expense: monthExpense,
+                            fmt: fmt,
+                          ),
+                          const SizedBox(height: 20),
+                          ...List.generate(sortedDays.length, (index) {
+                            final day = sortedDays[index];
+                            final dayTransactions = grouped[day] ?? [];
+                            dayTransactions.sort(
+                              (a, b) => b.transaction.transactionDate
+                                  .compareTo(a.transaction.transactionDate),
+                            );
+                            int income = 0, expense = 0;
+                            for (final t in dayTransactions) {
+                              if (t.transaction.type == 'Income') {
+                                income += t.transaction.amount;
+                              } else if (t.transaction.type == 'Expense') {
+                                expense += t.transaction.amount;
+                              }
+                            }
+                            final net = income - expense;
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _DayHeader(
+                                  day: day,
+                                  date: DateTime(
+                                    _selectedMonth.year,
+                                    _selectedMonth.month,
+                                    day,
+                                  ),
+                                  net: net,
+                                  fmt: fmt,
+                                ),
+                                ...dayTransactions.map(
+                                  (t) => TransactionItemCard(item: t),
+                                ),
+                                const SizedBox(height: 14),
+                              ],
+                            ).animate().fade().slideY(
+                              begin: 0.04,
+                              end: 0,
+                              delay: (index < 5 ? index * 60 : 0).ms,
+                              duration: 380.ms,
+                              curve: Curves.easeOut,
+                            );
+                          }),
+                        ],
+                      );
+                    }
+
+                    return AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 260),
+                      child: content,
+                    );
+                  },
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (err, _) => EmptyState(
+                    icon: Icons.error_outline,
+                    title: 'Gagal memuat',
+                    message: '$err',
+                  ),
+                ),
+              ),
             ),
           ],
         ),
-        elevation: 0,
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.filter_list),
-            onPressed: () => _showFilterSheet(context, ref),
-          ),
-        ],
       ),
-      body: GestureDetector(
-        behavior:
-            HitTestBehavior.translucent, // FIX: Detect swipes on empty space
-        onHorizontalDragEnd: (details) {
-          if (details.primaryVelocity! > 0) {
-            // Swipe Right -> Previous Month
-            _prevMonth();
-          } else if (details.primaryVelocity! < 0) {
-            // Swipe Left -> Next Month
-            _nextMonth();
-          }
-        },
-        child: transactionsAsync.when(
-          data: (allTransactions) {
-            // 1. Filter by Selected Month
-            final monthTransactions = allTransactions.where((t) {
-              final d = t.transaction.transactionDate;
-              return d.year == _selectedMonth.year &&
-                  d.month == _selectedMonth.month;
-            }).toList();
-
-            Widget content;
-            if (monthTransactions.isEmpty) {
-              content = Center(
-                key: ValueKey(
-                  'empty-${_selectedMonth.year}-${_selectedMonth.month}',
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.calendar_today,
-                      size: 48,
-                      color: isDarkMode ? Colors.white38 : Colors.grey,
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Tidak ada transaksi bulan ini',
-                      style: TextStyle(
-                        color: isDarkMode ? Colors.white38 : Colors.grey,
-                      ),
-                    ),
-                  ],
-                ).animate().fade(),
-              );
-            } else {
-              // 2. Group by Day
-              final grouped = _groupTransactionsByDay(monthTransactions);
-              final sortedDays = grouped.keys.toList()
-                ..sort((a, b) => b.compareTo(a)); // Descending
-
-              content = ListView.builder(
-                key: ValueKey(
-                  'list-${_selectedMonth.year}-${_selectedMonth.month}',
-                ),
-                padding: const EdgeInsets.only(bottom: 80), // Fab space
-                itemCount: sortedDays.length,
-                itemBuilder: (context, index) {
-                  final day = sortedDays[index];
-                  final dayTransactions = grouped[day] ?? [];
-
-                  // Sort txns within day (Newest First)
-                  dayTransactions.sort(
-                    (a, b) => b.transaction.transactionDate.compareTo(
-                      a.transaction.transactionDate,
-                    ),
-                  );
-
-                  // Calculate Day Total (Net)
-                  int income = 0;
-                  int expense = 0;
-                  for (var t in dayTransactions) {
-                    if (t.transaction.type == 'Income') {
-                      income += t.transaction.amount;
-                    } else if (t.transaction.type == 'Expense') {
-                      expense += t.transaction.amount;
-                    }
-                  }
-                  final net = income - expense;
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Day Header
-                      _buildDayHeader(day, net, currencyFormatter, isDarkMode),
-                      // Transaction Tiles
-                      ...dayTransactions.map(
-                        (item) => _buildTransactionItem(
-                          context,
-                          ref,
-                          item,
-                          currencyFormatter,
-                          isDarkMode,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                  ).animate().fade().slideY(
-                    delay: (index < 5 ? index * 50 : 0).ms,
-                    duration: 400.ms,
-                    curve: Curves.easeOut,
-                  );
-                },
-              );
-            }
-
-            return AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              transitionBuilder: (child, animation) {
-                return FadeTransition(
-                  opacity: animation,
-                  child: SlideTransition(
-                    position: Tween<Offset>(
-                      begin: const Offset(0.05, 0),
-                      end: Offset.zero,
-                    ).animate(animation),
-                    child: child,
-                  ),
-                );
-              },
-              child: content,
-            );
-          },
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (err, _) => Center(child: Text('Error: $err')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const AddTransactionScreen()),
         ),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Transaksi'),
+      ).animate().scale(
+        delay: 250.ms,
+        curve: Curves.elasticOut,
+        duration: 600.ms,
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const AddTransactionScreen(),
-            ),
-          );
-        },
-        backgroundColor: Colors.blue,
-        child: const Icon(Icons.add),
-      ).animate().scale(delay: 300.ms, curve: Curves.elasticOut),
     );
   }
 
-  void _prevMonth() {
-    setState(() {
-      _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
-    });
-  }
+  void _prevMonth() => setState(() {
+    _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
+  });
 
-  void _nextMonth() {
-    setState(() {
-      _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
-    });
-  }
+  void _nextMonth() => setState(() {
+    _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
+  });
 
   Map<int, List<TransactionWithDetails>> _groupTransactionsByDay(
     List<TransactionWithDetails> list,
   ) {
     final Map<int, List<TransactionWithDetails>> groups = {};
-    for (var item in list) {
+    for (final item in list) {
       final day = item.transaction.transactionDate.day;
-      if (!groups.containsKey(day)) {
-        groups[day] = [];
-      }
-      groups[day]!.add(item);
+      groups.putIfAbsent(day, () => []).add(item);
     }
     return groups;
-  }
-
-  Widget _buildDayHeader(
-    int day,
-    int netAmount,
-    NumberFormat fmt,
-    bool isDarkMode,
-  ) {
-    // Construct Date Object for formatting
-    final date = DateTime(_selectedMonth.year, _selectedMonth.month, day);
-
-    final dayName = DateFormat('EEEE', 'id_ID').format(date);
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            children: [
-              Text(
-                day.toString().padLeft(2, '0'),
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 24,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    dayName,
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: isDarkMode ? Colors.white70 : Colors.black87,
-                      fontSize: 14,
-                    ),
-                  ),
-                  Text(
-                    DateFormat('MMMM yyyy', 'id_ID').format(date),
-                    style: const TextStyle(color: Colors.grey, fontSize: 12),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          Text(
-            fmt.format(netAmount),
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: netAmount >= 0 ? Colors.green : Colors.red,
-              fontSize: 16,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTransactionItem(
-    BuildContext context,
-    WidgetRef ref,
-    TransactionWithDetails item,
-    NumberFormat fmt,
-    bool isDarkMode,
-  ) {
-    final textColor = Theme.of(context).colorScheme.onSurface;
-    final isTransfer = item.transaction.type == 'Transfer';
-    final transactionColor = isTransfer
-        ? Colors.blue
-        : item.transaction.type == 'Income'
-        ? Colors.green
-        : Colors.red;
-    final transactionIcon = isTransfer
-        ? Icons.swap_horiz
-        : item.transaction.type == 'Income'
-        ? Icons.arrow_downward
-        : Icons.arrow_upward;
-    final title = item.transaction.description.isEmpty
-        ? isTransfer
-              ? 'Transfer Saldo'
-              : item.category.name
-        : item.transaction.description;
-    final subtitle = isTransfer && item.destinationAccount != null
-        ? '${item.account.name} → ${item.destinationAccount!.name}'
-        : item.account.name;
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: InkWell(
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => AddTransactionScreen(editTransaction: item),
-            ),
-          );
-        },
-        // Using Row to layout carefully
-        child: Row(
-          children: [
-            // Icon
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: transactionColor.withValues(alpha: 0.1),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                transactionIcon,
-                color: transactionColor,
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 12),
-
-            // Text Content
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
-                      color: textColor,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Text(
-                        subtitle,
-                        style: const TextStyle(
-                          color: Colors.grey,
-                          fontSize: 12,
-                        ),
-                      ),
-                      if (item.transaction.proofImage != null) ...[
-                        const SizedBox(width: 8),
-                        const Icon(
-                          Icons.attach_file,
-                          size: 14,
-                          color: Colors.blue,
-                        ),
-                      ],
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-            // Amount
-            Text(
-              fmt.format(item.transaction.amount),
-              style: TextStyle(
-                color: transactionColor,
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-              ),
-            ),
-            const SizedBox(width: 8),
-            const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
-          ],
-        ),
-      ),
-    );
   }
 
   void _showFilterSheet(BuildContext context, WidgetRef ref) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
       builder: (context) => const _FilterSheet(),
     );
   }
 }
+
+// ---------------------------------------------------------------
+// Widgets
+// ---------------------------------------------------------------
+
+class _MonthStepper extends StatelessWidget {
+  final String label;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+
+  const _MonthStepper({
+    required this.label,
+    required this.onPrev,
+    required this.onNext,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: p.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _step(context, Icons.chevron_left_rounded, onPrev),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: Text(label, style: context.texts.labelLarge),
+          ),
+          _step(context, Icons.chevron_right_rounded, onNext),
+        ],
+      ),
+    );
+  }
+
+  Widget _step(BuildContext context, IconData icon, VoidCallback onTap) =>
+      InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Padding(
+          padding: const EdgeInsets.all(7),
+          child: Icon(icon, size: 19, color: context.palette.textMuted),
+        ),
+      );
+}
+
+class _RoundIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _RoundIconButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return Material(
+      color: Theme.of(context).cardColor,
+      borderRadius: BorderRadius.circular(AppRadius.sm),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            border: Border.all(color: p.border),
+            borderRadius: BorderRadius.circular(AppRadius.sm),
+          ),
+          child: Icon(icon, size: 19, color: p.textMuted),
+        ),
+      ),
+    );
+  }
+}
+
+class _MonthSummary extends StatelessWidget {
+  final int income;
+  final int expense;
+  final NumberFormat fmt;
+
+  const _MonthSummary({
+    required this.income,
+    required this.expense,
+    required this.fmt,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: StatTile(
+            label: 'Pemasukan',
+            value: fmt.format(income),
+            icon: Icons.south_west_rounded,
+            color: context.palette.income,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: StatTile(
+            label: 'Pengeluaran',
+            value: fmt.format(expense),
+            icon: Icons.north_east_rounded,
+            color: context.palette.expense,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DayHeader extends StatelessWidget {
+  final int day;
+  final DateTime date;
+  final int net;
+  final NumberFormat fmt;
+
+  const _DayHeader({
+    required this.day,
+    required this.date,
+    required this.net,
+    required this.fmt,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final negative = net < 0;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: p.surfaceAlt,
+              borderRadius: BorderRadius.circular(AppRadius.sm),
+              border: Border.all(color: p.border),
+            ),
+            child: Text(
+              day.toString().padLeft(2, '0'),
+              style: context.texts.titleMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  DateFormat('EEEE', 'id_ID').format(date),
+                  style: context.texts.titleSmall,
+                ),
+                Text(
+                  DateFormat('MMMM yyyy', 'id_ID').format(date),
+                  style: context.texts.bodySmall?.copyWith(color: p.textMuted),
+                ),
+              ],
+            ),
+          ),
+          AppBadge(
+            text: '${negative ? '-' : '+'}${fmt.format(net.abs())}',
+            color: negative ? p.expense : p.income,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------
+// Filter sheet
+// ---------------------------------------------------------------
 
 class _FilterSheet extends ConsumerStatefulWidget {
   const _FilterSheet();
@@ -436,12 +422,11 @@ class _FilterSheetState extends ConsumerState<_FilterSheet> {
   DateTime? _endDate;
   int? _categoryId;
   int? _accountId;
-  String? _type; // 'Income', 'Expense', or null
+  String? _type;
 
   @override
   void initState() {
     super.initState();
-    // Load existing filter
     final current = ref.read(transactionFilterProvider);
     _startDate = current.startDate;
     _endDate = current.endDate;
@@ -454,162 +439,106 @@ class _FilterSheetState extends ConsumerState<_FilterSheet> {
   Widget build(BuildContext context) {
     final categoriesAsync = ref.watch(categoriesProvider);
     final accountsAsync = ref.watch(accountsProvider);
+    final p = context.palette;
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.7,
+      initialChildSize: 0.72,
       minChildSize: 0.5,
-      maxChildSize: 0.9,
+      maxChildSize: 0.92,
       expand: false,
       builder: (_, scrollController) {
-        return Container(
-          padding: const EdgeInsets.all(20),
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
           child: ListView(
             controller: scrollController,
             children: [
+              Center(
+                child: Container(
+                  width: 42,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 18),
+                  decoration: BoxDecoration(
+                    color: p.border,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    'Filter Transaksi',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
+                  Text('Filter Transaksi', style: context.texts.titleLarge),
                   TextButton(
-                    onPressed: () {
-                      _resetFilters();
-                    },
+                    onPressed: _resetFilters,
                     child: const Text('Reset'),
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
-
-              // Date Range - OPTIONAL as we now have Month View
-              // Keeping it allows cross-month search if needed.
-              const Text(
-                'Tanggal',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => _pickDateRange(context),
-                      icon: const Icon(Icons.calendar_today, size: 16),
-                      label: Text(
-                        _startDate == null
-                            ? 'Pilih Rentang Tanggal'
-                            : '${DateFormat('dd/MM/yy').format(_startDate!)} - ${_endDate != null ? DateFormat('dd/MM/yy').format(_endDate!) : "?"}',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ),
-                  ),
-                ],
+              const SizedBox(height: 12),
+              const _FieldLabel('Tanggal'),
+              OutlinedButton.icon(
+                onPressed: () => _pickDateRange(context),
+                icon: const Icon(Icons.calendar_today_rounded, size: 16),
+                label: Text(
+                  _startDate == null
+                      ? 'Pilih Rentang Tanggal'
+                      : '${DateFormat('dd/MM/yy').format(_startDate!)} - ${_endDate != null ? DateFormat('dd/MM/yy').format(_endDate!) : '?'}',
+                  style: context.texts.bodyMedium,
+                ),
               ),
               const SizedBox(height: 20),
-
-              // Type
-              const Text(
-                'Tipe Transaksi',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
+              const _FieldLabel('Tipe Transaksi'),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  _buildTypeChip('Semua', null),
-                  _buildTypeChip('Pemasukan', 'Income'),
-                  _buildTypeChip('Pengeluaran', 'Expense'),
-                  _buildTypeChip('Transfer', 'Transfer'),
+                  _typeChip('Semua', null),
+                  _typeChip('Pemasukan', 'Income'),
+                  _typeChip('Pengeluaran', 'Expense'),
+                  _typeChip('Transfer', 'Transfer'),
                 ],
               ),
               const SizedBox(height: 20),
-
-              // Category
-              const Text(
-                'Kategori',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
+              const _FieldLabel('Kategori'),
               categoriesAsync.when(
-                data: (cats) {
-                  return DropdownButtonFormField<int>(
-                    // ignore: deprecated_member_use
-                    value: _categoryId,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
+                data: (cats) => DropdownButtonFormField<int>(
+                  initialValue: _categoryId,
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('Semua Kategori')),
+                    ...cats.map(
+                      (c) => DropdownMenuItem(value: c.id, child: Text(c.name)),
                     ),
-                    items: [
-                      const DropdownMenuItem(
-                        value: null,
-                        child: Text('Semua Kategori'),
-                      ),
-                      ...cats.map(
-                        (c) =>
-                            DropdownMenuItem(value: c.id, child: Text(c.name)),
-                      ),
-                    ],
-                    onChanged: (v) => setState(() => _categoryId = v),
-                  );
-                },
+                  ],
+                  onChanged: (v) => setState(() => _categoryId = v),
+                ),
                 loading: () => const LinearProgressIndicator(),
-                error: (e, s) => Text('Error loading categories'),
+                error: (e, s) => const Text('Gagal memuat kategori'),
               ),
               const SizedBox(height: 20),
-
-              // Account
-              const Text(
-                'Akun / Dompet',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
+              const _FieldLabel('Akun / Dompet'),
               accountsAsync.when(
-                data: (accs) {
-                  return DropdownButtonFormField<int>(
-                    // ignore: deprecated_member_use
-                    value: _accountId,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
+                data: (accs) => DropdownButtonFormField<int>(
+                  initialValue: _accountId,
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('Semua Akun')),
+                    ...accs.map(
+                      (a) => DropdownMenuItem(value: a.id, child: Text(a.name)),
                     ),
-                    items: [
-                      const DropdownMenuItem(
-                        value: null,
-                        child: Text('Semua Akun'),
-                      ),
-                      ...accs.map(
-                        (a) =>
-                            DropdownMenuItem(value: a.id, child: Text(a.name)),
-                      ),
-                    ],
-                    onChanged: (v) => setState(() => _accountId = v),
-                  );
-                },
+                  ],
+                  onChanged: (v) => setState(() => _accountId = v),
+                ),
                 loading: () => const LinearProgressIndicator(),
-                error: (e, s) => Text('Error loading accounts'),
+                error: (e, s) => const Text('Gagal memuat akun'),
               ),
-              const SizedBox(height: 32),
-
-              // Apply Button
+              const SizedBox(height: 28),
               SizedBox(
                 width: double.infinity,
-                child: ElevatedButton(
+                child: FilledButton.icon(
                   onPressed: () {
                     _applyFilters();
                     Navigator.pop(context);
                   },
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  child: const Text('Terapkan Filter'),
+                  icon: const Icon(Icons.check_rounded, size: 18),
+                  label: const Text('Terapkan Filter'),
                 ),
               ),
             ],
@@ -619,15 +548,12 @@ class _FilterSheetState extends ConsumerState<_FilterSheet> {
     );
   }
 
-  Widget _buildTypeChip(String label, String? value) {
-    final isSelected = _type == value;
+  Widget _typeChip(String label, String? value) {
     return ChoiceChip(
       label: Text(label),
-      selected: isSelected,
+      selected: _type == value,
       onSelected: (selected) {
-        if (selected) {
-          setState(() => _type = value);
-        }
+        if (selected) setState(() => _type = value);
       },
     );
   }
@@ -667,5 +593,18 @@ class _FilterSheetState extends ConsumerState<_FilterSheet> {
         _endDate = picked.end;
       });
     }
+  }
+}
+
+class _FieldLabel extends StatelessWidget {
+  final String text;
+  const _FieldLabel(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(text, style: context.texts.titleSmall),
+    );
   }
 }

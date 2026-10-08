@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import '../database/database.dart';
 import '../providers/dashboard_providers.dart';
-import '../repositories/transaction_repository.dart';
+import '../theme/app_theme.dart';
+import '../widgets/ui_kit.dart';
 import '../widgets/transaction_item_card.dart';
 
 class AccountDetailScreen extends ConsumerWidget {
@@ -14,122 +15,110 @@ class AccountDetailScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final repo = ref.watch(transactionRepositoryProvider);
-    final currencyFormatter = NumberFormat.currency(
+    final fmt = NumberFormat.currency(
       locale: 'id_ID',
       symbol: 'Rp ',
       decimalDigits: 0,
     );
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      appBar: AppBar(title: Text(account.name), elevation: 0),
-      body: Column(
-        children: [
-          // Header Card
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Theme.of(context).appBarTheme.backgroundColor,
-              borderRadius: const BorderRadius.vertical(
-                bottom: Radius.circular(20),
-              ),
-              boxShadow: isDarkMode
-                  ? []
-                  : [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
+      appBar: AppBar(title: Text(account.name)),
+      body: ref.watch(transactionsByAccountProvider(account.id)).when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (err, _) => Center(child: Text('Error: $err')),
+        data: (transactions) => CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                child: HeroPanel(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(
+                              Icons.account_balance_wallet_rounded,
+                              color: Colors.white,
+                              size: 22,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Saldo Saat Ini',
+                                style: context.texts.bodySmall?.copyWith(
+                                  color: Colors.white.withValues(alpha: 0.85),
+                                ),
+                              ),
+                              Text(
+                                account.type,
+                                style: context.texts.titleSmall?.copyWith(
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          fmt.format(account.currentBalance),
+                          style: context.texts.displaySmall?.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
                       ),
                     ],
+                  ),
+                ),
+              ).animate().fade().slideY(
+                begin: -0.1,
+                end: 0,
+                duration: 380.ms,
+              ),
             ),
-            child: Column(
-              children: [
-                const Text(
-                  'Saldo Saat Ini',
-                  style: TextStyle(color: Colors.grey),
+            if (transactions.isEmpty)
+              const SliverFillRemaining(
+                hasScrollBody: false,
+                child: EmptyState(
+                  icon: Icons.receipt_long_outlined,
+                  title: 'Belum ada transaksi',
+                  message: 'Transaksi pada akun ini akan tampil di sini.',
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  currencyFormatter.format(account.currentBalance),
-                  style: TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    account.type,
-                    style: const TextStyle(
-                      color: Colors.blue,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ).animate().fade().slideY(begin: -0.2, end: 0, duration: 400.ms),
-          ),
-
-          Expanded(
-            child: StreamBuilder<List<TransactionWithDetails>>(
-              stream: repo.watchTransactionsByAccount(account.id),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (snapshot.hasError) {
-                  return Center(child: Text('Error: ${snapshot.error}'));
-                }
-
-                final transactions = snapshot.data ?? [];
-
-                if (transactions.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(
-                          Icons.receipt_long,
-                          size: 48,
-                          color: Colors.grey,
-                        ),
-                        const SizedBox(height: 12),
-                        const Text('Belum ada transaksi di akun ini'),
-                      ],
-                    ).animate().fade(),
-                  );
-                }
-
-                return ListView.builder(
-                  padding: const EdgeInsets.all(20),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
+                sliver: SliverList.builder(
                   itemCount: transactions.length,
                   itemBuilder: (context, index) {
-                    final item = transactions[index];
                     return TransactionItemCard(
-                          item: item,
-                          perspectiveAccountId: account.id,
-                        )
-                        .animate()
-                        .fade()
-                        .slideX(begin: 0.1, end: 0, delay: (index * 20).ms);
+                      item: transactions[index],
+                      perspectiveAccountId: account.id,
+                    ).animate().fade(delay: (index * 30).ms).slideX(
+                      begin: 0.05,
+                      end: 0,
+                      delay: (index * 30).ms,
+                      duration: 300.ms,
+                    );
                   },
-                );
-              },
-            ),
-          ),
-        ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

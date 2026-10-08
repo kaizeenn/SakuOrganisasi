@@ -1,290 +1,215 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import '../database/database.dart';
-import 'package:drift/drift.dart' as drift;
 import '../providers/dashboard_providers.dart';
-import '../repositories/transaction_repository.dart';
+import '../theme/app_theme.dart';
+import '../widgets/ui_kit.dart';
 import '../widgets/transaction_item_card.dart';
-import 'package:flutter/services.dart';
 import '../utils/currency_format.dart';
 
-class EventDetailScreen extends ConsumerStatefulWidget {
+class EventDetailScreen extends ConsumerWidget {
   final Event event;
 
   const EventDetailScreen({super.key, required this.event});
 
   @override
-  ConsumerState<EventDetailScreen> createState() => _EventDetailScreenState();
-}
-
-class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
-  @override
-  Widget build(BuildContext context) {
-    final repo = ref.watch(transactionRepositoryProvider);
-    final currencyFormatter = NumberFormat.currency(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final fmt = NumberFormat.currency(
       locale: 'id_ID',
       symbol: 'Rp ',
       decimalDigits: 0,
     );
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final p = context.palette;
+    final eventAsync = ref.watch(eventByIdProvider(event.id));
+    final txAsync = ref.watch(transactionsByEventProvider(event.id));
 
-    return StreamBuilder<Event>(
-      stream: repo.watchEventById(widget.event.id),
-      initialData: widget.event,
-      builder: (context, eventSnapshot) {
-        final liveEvent = eventSnapshot.data;
-
-        if (liveEvent == null) {
-          return const Scaffold(
-            body: Center(
-              child: Text("Event tidak ditemukan (mungkin dihapus)"),
-            ),
-          );
-        }
-
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(liveEvent.name),
-            elevation: 0,
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.edit),
-                onPressed: () => _showEditDialog(context, ref, liveEvent),
-              ),
-              IconButton(
-                icon: const Icon(Icons.delete),
-                onPressed: () => _confirmDelete(context, ref),
-              ),
-            ],
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(event.name),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.edit_outlined),
+            onPressed: () => _showEditDialog(context, ref, event),
           ),
-          body: StreamBuilder<List<TransactionWithDetails>>(
-            stream: repo.watchTransactionsByEvent(liveEvent.id),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                // If we have no data at all, show spinner.
-                // But usually we want instant load if cached.
-                // Since this is secondary stream, simple loading is okay.
-                return const Center(child: CircularProgressIndicator());
+          IconButton(
+            icon: const Icon(Icons.delete_outline_rounded),
+            onPressed: () => _confirmDelete(context, ref),
+          ),
+        ],
+      ),
+      body: eventAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (err, _) => Center(child: Text('Error: $err')),
+        data: (liveEvent) => txAsync.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (err, _) => Center(child: Text('Error: $err')),
+          data: (transactions) {
+            int totalExpense = 0;
+            for (final item in transactions) {
+              if (item.transaction.type == 'Expense') {
+                totalExpense += item.transaction.amount;
               }
-              if (snapshot.hasError) {
-                return Center(child: Text('Error: ${snapshot.error}'));
-              }
+            }
 
-              final transactions = snapshot.data ?? [];
+            final budget = liveEvent.budgetLimit;
+            final remaining = budget - totalExpense;
+            final progress = budget > 0
+                ? (totalExpense / budget).clamp(0.0, 1.0)
+                : 0.0;
+            final isOver = remaining < 0;
+            final barColor = isOver
+                ? p.expense
+                : progress > 0.8
+                ? p.accent
+                : p.income;
 
-              // Calculate Metrics
-              int totalExpense = 0;
-              for (var item in transactions) {
-                if (item.transaction.type == 'Expense') {
-                  totalExpense += item.transaction.amount;
-                }
-              }
-
-              final budget = liveEvent.budgetLimit;
-              final remaining = budget - totalExpense;
-              final progress = budget > 0
-                  ? (totalExpense / budget).clamp(0.0, 1.0)
-                  : 0.0;
-              final isOverBudget = remaining < 0;
-
-              return Column(
-                children: [
-                  // Header Metrics
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).appBarTheme.backgroundColor,
-                      borderRadius: const BorderRadius.vertical(
-                        bottom: Radius.circular(20),
-                      ),
-                      boxShadow: isDarkMode
-                          ? []
-                          : [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.05),
-                                blurRadius: 10,
-                                offset: const Offset(0, 4),
+            return CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                    child: HeroPanel(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              AppBadge(
+                                text: liveEvent.status == 'Active'
+                                    ? 'Aktif'
+                                    : liveEvent.status == 'Finished'
+                                    ? 'Selesai'
+                                    : liveEvent.status,
+                                color: Colors.white,
+                              ),
+                              const Spacer(),
+                              Text(
+                                'Anggaran ${fmt.format(budget)}',
+                                style: context.texts.labelSmall?.copyWith(
+                                  color: Colors.white.withValues(alpha: 0.85),
+                                ),
                               ),
                             ],
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.date_range_rounded,
+                                size: 14,
+                                color: Colors.white.withValues(alpha: 0.85),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                '${DateFormat('dd MMM yy').format(liveEvent.startDate)}'
+                                '${liveEvent.endDate != null ? ' — ${DateFormat('dd MMM yy').format(liveEvent.endDate!)}' : ' — sekarang'}',
+                                style: context.texts.bodySmall?.copyWith(
+                                  color: Colors.white.withValues(alpha: 0.9),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            isOver ? 'Kelebihan Anggaran' : 'Sisa Anggaran',
+                            style: context.texts.bodySmall?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.85),
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              fmt.format(remaining),
+                              style: context.texts.displaySmall?.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(999),
+                            child: LinearProgressIndicator(
+                              value: progress,
+                              minHeight: 10,
+                              backgroundColor: Colors.white.withValues(
+                                alpha: 0.22,
+                              ),
+                              valueColor: AlwaysStoppedAnimation(barColor),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Terpakai ${(progress * 100).toStringAsFixed(1)}% dari anggaran',
+                            style: context.texts.labelSmall?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.85),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: liveEvent.status == 'Active'
-                                    ? Colors.green.withValues(alpha: 0.2)
-                                    : Colors.grey.withValues(alpha: 0.2),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                liveEvent.status,
-                                style: TextStyle(
-                                  color: liveEvent.status == 'Active'
-                                      ? Colors.green
-                                      : Colors.grey,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                            const Spacer(),
-                            Text(
-                              'Anggaran: ${currencyFormatter.format(budget)}',
-                              style: const TextStyle(color: Colors.grey),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.date_range,
-                              size: 16,
-                              color: Colors.grey[600],
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              '${DateFormat('dd MMM').format(liveEvent.startDate)} '
-                              '${liveEvent.endDate != null ? "- ${DateFormat('dd MMM yyyy').format(liveEvent.endDate!)}" : "- Sekarang"}',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                                color: Colors.grey[800],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Sisa Anggaran',
-                          style: TextStyle(
-                            color: Colors.grey[600],
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          currencyFormatter.format(remaining),
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                            color: isOverBudget
-                                ? Colors.red
-                                : (isDarkMode ? Colors.white : Colors.black87),
-                          ),
-                        ),
-                        if (isOverBudget)
-                          const Text(
-                            '(Over Budget)',
-                            style: TextStyle(
-                              color: Colors.red,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                            ),
-                          ),
-
-                        const SizedBox(height: 16),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: LinearProgressIndicator(
-                            value: progress,
-                            minHeight: 12,
-                            backgroundColor: isDarkMode
-                                ? (Theme.of(context).brightness ==
-                                          Brightness.dark
-                                      ? Colors.black12
-                                      : Colors.white10)
-                                : Colors.grey[200],
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              progress > 0.9 ? Colors.red : Colors.blue,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: Text(
-                            'Terpakai: ${(progress * 100).toStringAsFixed(1)}%',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ).animate().fade().slideY(begin: -0.2, end: 0, duration: 400.ms),
+                  ).animate().fade().slideY(
+                    begin: -0.1,
+                    end: 0,
+                    duration: 380.ms,
                   ),
-
-                  // Transaction List
-                  Expanded(
-                    child: transactions.isEmpty
-                        ? Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(
-                                  Icons.event_note,
-                                  size: 48,
-                                  color: Colors.grey,
-                                ),
-                                const SizedBox(height: 12),
-                                const Text(
-                                  'Belum ada transaksi untuk event ini',
-                                ),
-                              ],
-                            ).animate().fade(),
-                          )
-                        : ListView.builder(
-                            padding: const EdgeInsets.all(20),
-                            itemCount: transactions.length,
-                            itemBuilder: (context, index) {
-                              final item = transactions[index];
-                              return TransactionItemCard(
-                                item: item,
-                              ).animate().fade().slideX(
-                                begin: 0.1,
-                                end: 0,
-                                delay: (index * 20).ms,
-                              );
-                            },
-                          ),
+                ),
+                if (transactions.isEmpty)
+                  const SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: EmptyState(
+                      icon: Icons.event_note_outlined,
+                      title: 'Belum ada transaksi',
+                      message:
+                          'Pengeluaran untuk event ini akan tampil di sini.',
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
+                    sliver: SliverList.builder(
+                      itemCount: transactions.length,
+                      itemBuilder: (context, index) => TransactionItemCard(
+                        item: transactions[index],
+                      ).animate().fade(delay: (index * 30).ms).slideX(
+                        begin: 0.05,
+                        end: 0,
+                        delay: (index * 30).ms,
+                        duration: 300.ms,
+                      ),
+                    ),
                   ),
-                ],
-              );
-            },
-          ),
-        );
-      },
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 
   Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
+    final p = context.palette;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Hapus Event?'),
         content: const Text(
-          'Transaksi terkait TIDAK akan dihapus, tetapi akan dilepas dari event ini.',
+          'Transaksi terkait tidak dihapus, hanya dilepas dari event ini.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: const Text('Batal'),
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: p.expense,
+              minimumSize: const Size(0, 44),
             ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Hapus'),
@@ -294,19 +219,15 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
     );
 
     if (confirm == true) {
-      final repo = ref.read(transactionRepositoryProvider);
-      await repo.deleteEvent(widget.event.id);
-      if (context.mounted) {
-        Navigator.pop(context); // Back to List
-      }
+      await ref
+          .read(transactionRepositoryProvider)
+          .deleteEvent(event.id);
+      invalidateAllData(ref);
+      if (context.mounted) Navigator.pop(context);
     }
   }
 
-  void _showEditDialog(
-    BuildContext context,
-    WidgetRef ref,
-    Event currentEvent,
-  ) {
+  void _showEditDialog(BuildContext context, WidgetRef ref, Event currentEvent) {
     showDialog(
       context: context,
       builder: (context) => _EditEventDialog(event: currentEvent),
@@ -351,6 +272,7 @@ class _EditEventDialogState extends ConsumerState<_EditEventDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.palette;
     return AlertDialog(
       title: const Text('Edit Event'),
       content: SingleChildScrollView(
@@ -361,14 +283,20 @@ class _EditEventDialogState extends ConsumerState<_EditEventDialog> {
             children: [
               TextFormField(
                 controller: _nameController,
-                decoration: const InputDecoration(labelText: 'Nama Event'),
+                decoration: const InputDecoration(
+                  labelText: 'Nama Event',
+                  prefixIcon: Icon(Icons.event_note_rounded),
+                ),
                 validator: (val) =>
                     val == null || val.isEmpty ? 'Wajib diisi' : null,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               TextFormField(
                 controller: _budgetController,
-                decoration: const InputDecoration(labelText: 'Anggaran (Rp)'),
+                decoration: const InputDecoration(
+                  labelText: 'Anggaran',
+                  prefixIcon: Icon(Icons.payments_rounded),
+                ),
                 keyboardType: TextInputType.number,
                 inputFormatters: [
                   FilteringTextInputFormatter.digitsOnly,
@@ -377,24 +305,19 @@ class _EditEventDialogState extends ConsumerState<_EditEventDialog> {
                 validator: (val) =>
                     val == null || val.isEmpty ? 'Wajib diisi' : null,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               DropdownButtonFormField<String>(
-                // value: _status, // Deprecated in favor of initialValue for form fields
                 initialValue: _status,
                 decoration: const InputDecoration(labelText: 'Status'),
                 items: const [
                   DropdownMenuItem(value: 'Active', child: Text('Aktif')),
-                  DropdownMenuItem(value: 'Completed', child: Text('Selesai')),
-                  DropdownMenuItem(
-                    value: 'Cancelled',
-                    child: Text('Dibatalkan'),
-                  ),
+                  DropdownMenuItem(value: 'Finished', child: Text('Selesai')),
                 ],
                 onChanged: (val) {
                   if (val != null) setState(() => _status = val);
                 },
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               InkWell(
                 onTap: () async {
                   final picked = await showDatePicker(
@@ -406,11 +329,14 @@ class _EditEventDialogState extends ConsumerState<_EditEventDialog> {
                   if (picked != null) setState(() => _startDate = picked);
                 },
                 child: InputDecorator(
-                  decoration: const InputDecoration(labelText: 'Tanggal Mulai'),
+                  decoration: const InputDecoration(
+                    labelText: 'Tanggal Mulai',
+                    prefixIcon: Icon(Icons.calendar_today_rounded),
+                  ),
                   child: Text(DateFormat('dd MMM yyyy').format(_startDate)),
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               InkWell(
                 onTap: () async {
                   final picked = await showDatePicker(
@@ -423,7 +349,8 @@ class _EditEventDialogState extends ConsumerState<_EditEventDialog> {
                 },
                 child: InputDecorator(
                   decoration: const InputDecoration(
-                    labelText: 'Tanggal Selesai (Opsional)',
+                    labelText: 'Tanggal Selesai (opsional)',
+                    prefixIcon: Icon(Icons.event_available_rounded),
                   ),
                   child: Text(
                     _endDate != null
@@ -441,38 +368,32 @@ class _EditEventDialogState extends ConsumerState<_EditEventDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('Batal'),
         ),
-        ElevatedButton(onPressed: _save, child: const Text('Simpan')),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: p.brand,
+            minimumSize: const Size(0, 44),
+          ),
+          onPressed: _save,
+          child: const Text('Simpan'),
+        ),
       ],
     );
   }
 
   Future<void> _save() async {
-    if (_formKey.currentState!.validate()) {
-      final repo = ref.read(transactionRepositoryProvider);
+    if (!_formKey.currentState!.validate()) return;
+    final repo = ref.read(transactionRepositoryProvider);
+    final cleanBudget =
+        _budgetController.text.replaceAll(RegExp(r'[^0-9]'), '');
 
-      // 1. Sanitize Budget Input (Remove 'Rp' and dots)
-      final cleanBudget = _budgetController.text.replaceAll(
-        RegExp(r'[^0-9]'),
-        '',
-      );
-
-      // 2. Create Companion (Explicitly passing ID from the original event)
-      final updated = widget.event
-          .toCompanion(true)
-          .copyWith(
-            name: drift.Value(_nameController.text),
-            budgetLimit: drift.Value(int.parse(cleanBudget)),
-            status: drift.Value(_status),
-            startDate: drift.Value(_startDate),
-            endDate: drift.Value(_endDate), // Nullable is fine here
-          );
-
-      // 3. Update via Repository
-      await repo.updateEvent(updated);
-
-      if (mounted) {
-        Navigator.pop(context); // Close Dialog on Success
-      }
-    }
+    await repo.updateEvent(
+      id: widget.event.id,
+      name: _nameController.text,
+      budgetLimit: int.parse(cleanBudget),
+      status: _status,
+      startDate: _startDate,
+      endDate: _endDate,
+    );
+    if (mounted) Navigator.pop(context);
   }
 }

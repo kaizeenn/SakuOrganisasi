@@ -1,7 +1,11 @@
-import 'package:drift/drift.dart';
-import 'package:rxdart/rxdart.dart';
+// Repository berbasis API backend (MySQL) — bukan Drift/SQLite lokal.
+// Semua data lewat ApiClient → backend Express → MySQL. Sehingga semua user
+// (bendahara) melihat data yang sama. Method "watch*" mengembalikan Future
+// (HTTP request-response); provider Riverpod memakai FutureProvider +
+// invalidate saat ada mutasi.
 import '../database/database.dart';
 import '../models/dashboard_summary.dart';
+import '../services/api_client.dart';
 
 class TransactionWithDetails {
   final Transaction transaction;
@@ -17,863 +21,6 @@ class TransactionWithDetails {
   });
 }
 
-class TransactionRepository {
-  final AppDatabase _db;
-  static const String transferType = 'Transfer';
-  static const String transferCategoryName = 'Transfer Antar Rekening';
-
-  TransactionRepository(this._db);
-
-  AppDatabase getDatabase() => _db;
-
-  Future<void> _updateAccountBalance(int accountId, int delta) async {
-    final account = await (_db.select(
-      _db.accounts,
-    )..where((tbl) => tbl.id.equals(accountId))).getSingle();
-
-    await (_db.update(_db.accounts)..where((tbl) => tbl.id.equals(accountId)))
-        .write(
-          AccountsCompanion(
-            currentBalance: Value(account.currentBalance + delta),
-          ),
-        );
-  }
-
-  Future<void> _applyTransactionBalance(
-    Transaction transaction, {
-    bool reverse = false,
-  }) async {
-    switch (transaction.type) {
-      case 'Income':
-        await _updateAccountBalance(
-          transaction.accountId,
-          reverse ? -transaction.amount : transaction.amount,
-        );
-        break;
-      case 'Expense':
-        await _updateAccountBalance(
-          transaction.accountId,
-          reverse ? transaction.amount : -transaction.amount,
-        );
-        break;
-      case transferType:
-        final destinationAccountId = transaction.transferAccountId;
-        if (destinationAccountId == null) {
-          throw Exception('Akun tujuan transfer wajib dipilih.');
-        }
-        if (destinationAccountId == transaction.accountId) {
-          throw Exception('Akun sumber dan tujuan transfer tidak boleh sama.');
-        }
-
-        await _updateAccountBalance(
-          transaction.accountId,
-          reverse ? transaction.amount : -transaction.amount,
-        );
-        await _updateAccountBalance(
-          destinationAccountId,
-          reverse ? -transaction.amount : transaction.amount,
-        );
-        break;
-      default:
-        throw Exception('Tipe transaksi tidak didukung: ${transaction.type}');
-    }
-  }
-
-  Future<int> getOrInsertTransferCategory() async {
-    final existing = await (_db.select(_db.categories)..where(
-      (tbl) =>
-          tbl.name.equals(transferCategoryName) &
-          tbl.type.equals(transferType),
-    )).getSingleOrNull();
-
-    if (existing != null) return existing.id;
-
-    return _db.into(_db.categories).insert(
-      CategoriesCompanion.insert(
-        name: transferCategoryName,
-        type: transferType,
-      ),
-    );
-  }
-
-  // 1. Create Transaction with Balance Update Logic
-  Future<void> createTransaction(
-    TransactionsCompanion entry,
-    int accountId,
-    int? eventId,
-  ) async {
-    await _db.transaction(() async {
-      final isTransfer = entry.type.value == transferType;
-      final destinationAccountId = isTransfer
-          ? entry.transferAccountId.value
-          : null;
-
-      if (isTransfer) {
-        if (destinationAccountId == null) {
-          throw Exception('Akun tujuan transfer wajib dipilih.');
-        }
-        if (destinationAccountId == accountId) {
-          throw Exception('Akun sumber dan tujuan transfer tidak boleh sama.');
-        }
-      }
-
-      // a. Insert the transaction
-      final transactionEntry = entry.copyWith(
-        accountId: Value(accountId),
-        eventId: Value(isTransfer ? null : eventId),
-        transferAccountId: Value(isTransfer ? destinationAccountId : null),
-      );
-
-      final transaction = await _db
-          .into(_db.transactions)
-          .insertReturning(transactionEntry);
-
-      await _applyTransactionBalance(transaction);
-    });
-  }
-
-  // 1.5 Update Transaction
-  Future<void> updateTransaction(TransactionsCompanion entry) async {
-    await _db.transaction(() async {
-      // a. Get Old Transaction
-      final oldTx = await (_db.select(
-        _db.transactions,
-      )..where((t) => t.id.equals(entry.id.value))).getSingle();
-
-      // b. Revert Old Balance
-      await _applyTransactionBalance(oldTx, reverse: true);
-
-      final isTransfer = entry.type.value == transferType;
-      final newAccountId = entry.accountId.present
-          ? entry.accountId.value
-          : oldTx.accountId;
-      final newEventId = entry.eventId.present ? entry.eventId.value : oldTx.eventId;
-      final newTransferAccountId = entry.transferAccountId.present
-          ? entry.transferAccountId.value
-          : oldTx.transferAccountId;
-
-      if (isTransfer) {
-        if (newTransferAccountId == null) {
-          throw Exception('Akun tujuan transfer wajib dipilih.');
-        }
-        if (newTransferAccountId == newAccountId) {
-          throw Exception('Akun sumber dan tujuan transfer tidak boleh sama.');
-        }
-      }
-
-      // c. Update Transaction Record
-      final updatedEntry = entry.copyWith(
-        eventId: Value(isTransfer ? null : newEventId),
-        transferAccountId: Value(isTransfer ? newTransferAccountId : null),
-      );
-
-      await (_db.update(
-        _db.transactions,
-      )..where((t) => t.id.equals(entry.id.value))).write(updatedEntry);
-
-      // d. Apply New Balance
-      final newTx = await (_db.select(
-        _db.transactions,
-      )..where((t) => t.id.equals(entry.id.value))).getSingle();
-
-      await _applyTransactionBalance(newTx);
-    });
-  }
-
-  // 2. Delete Transaction with Balance Reversal Logic
-  Future<void> deleteTransaction(Transaction transaction) async {
-    await _db.transaction(() async {
-      // a. Reverse the balance calculation
-      await _applyTransactionBalance(transaction, reverse: true);
-
-      // c. Delete the transaction row
-      await (_db.delete(
-        _db.transactions,
-      )..where((tbl) => tbl.id.equals(transaction.id))).go();
-    });
-  }
-
-  // 3. Get Dashboard Summary
-  Stream<DashboardSummary> getDashboardSummary() {
-    // Stream 1: Total Balance of all accounts
-    final balanceStream =
-        (_db.selectOnly(_db.accounts)
-              ..addColumns([_db.accounts.currentBalance.sum()]))
-            .watchSingle()
-            .map((row) => row.read(_db.accounts.currentBalance.sum()) ?? 0);
-
-    // Filter range: This Month
-    final now = DateTime.now();
-    final startOfMonth = DateTime(now.year, now.month, 1);
-    final endOfMonth = DateTime(now.year, now.month + 1, 0, 23, 59, 59);
-
-    // Stream 2: Total Income (This Month)
-    final incomeStream =
-        (_db.selectOnly(_db.transactions)
-              ..addColumns([_db.transactions.amount.sum()])
-              ..where(
-                _db.transactions.type.equals('Income') &
-                    _db.transactions.transactionDate.isBetweenValues(
-                      startOfMonth,
-                      endOfMonth,
-                    ),
-              ))
-            .watchSingle()
-            .map((row) => row.read(_db.transactions.amount.sum()) ?? 0);
-
-    // Stream 3: Total Expense (This Month)
-    final expenseStream =
-        (_db.selectOnly(_db.transactions)
-              ..addColumns([_db.transactions.amount.sum()])
-              ..where(
-                _db.transactions.type.equals('Expense') &
-                    _db.transactions.transactionDate.isBetweenValues(
-                      startOfMonth,
-                      endOfMonth,
-                    ),
-              ))
-            .watchSingle()
-            .map((row) => row.read(_db.transactions.amount.sum()) ?? 0);
-
-    // Combine all 3 streams
-    return Rx.combineLatest3(
-      balanceStream,
-      incomeStream,
-      expenseStream,
-      (balance, income, expense) => DashboardSummary(
-        totalBalance: balance,
-        totalIncome: income,
-        totalExpense: expense,
-      ),
-    );
-  }
-
-  // 4. Watch Recent Transactions
-  Stream<List<TransactionWithDetails>> watchRecentTransactions() {
-    final transferAccounts = _db.alias(_db.accounts, 'transfer_accounts_recent');
-    final query =
-        _db.select(_db.transactions).join([
-            leftOuterJoin(
-              _db.accounts,
-              _db.accounts.id.equalsExp(_db.transactions.accountId),
-            ),
-            leftOuterJoin(
-              transferAccounts,
-              transferAccounts.id.equalsExp(_db.transactions.transferAccountId),
-            ),
-            leftOuterJoin(
-              _db.categories,
-              _db.categories.id.equalsExp(_db.transactions.categoryId),
-            ),
-          ])
-          ..orderBy([OrderingTerm.desc(_db.transactions.transactionDate)])
-          ..limit(50);
-
-    return query.watch().map((rows) {
-      return rows.map((row) {
-        return TransactionWithDetails(
-          transaction: row.readTable(_db.transactions),
-          account: row.readTable(_db.accounts),
-          category: row.readTable(_db.categories),
-          destinationAccount: row.readTableOrNull(transferAccounts),
-        );
-      }).toList();
-    });
-  }
-
-  // 4.1 Watch Transactions by Account
-  Stream<List<TransactionWithDetails>> watchTransactionsByAccount(
-    int accountId,
-  ) {
-    final transferAccounts = _db.alias(
-      _db.accounts,
-      'transfer_accounts_by_account',
-    );
-    final query =
-        _db.select(_db.transactions).join([
-            leftOuterJoin(
-              _db.accounts,
-              _db.accounts.id.equalsExp(_db.transactions.accountId),
-            ),
-            leftOuterJoin(
-              transferAccounts,
-              transferAccounts.id.equalsExp(_db.transactions.transferAccountId),
-            ),
-            leftOuterJoin(
-              _db.categories,
-              _db.categories.id.equalsExp(_db.transactions.categoryId),
-            ),
-          ])
-          ..where(
-            _db.transactions.accountId.equals(accountId) |
-                _db.transactions.transferAccountId.equals(accountId),
-          )
-          ..orderBy([OrderingTerm.desc(_db.transactions.transactionDate)]);
-
-    return query.watch().map((rows) {
-      return rows.map((row) {
-        return TransactionWithDetails(
-          transaction: row.readTable(_db.transactions),
-          account: row.readTable(_db.accounts),
-          category: row.readTable(_db.categories),
-          destinationAccount: row.readTableOrNull(transferAccounts),
-        );
-      }).toList();
-    });
-  }
-
-  // 4.2 Watch Transactions by Event
-  Stream<List<TransactionWithDetails>> watchTransactionsByEvent(int eventId) {
-    final transferAccounts = _db.alias(
-      _db.accounts,
-      'transfer_accounts_by_event',
-    );
-    final query =
-        _db.select(_db.transactions).join([
-            leftOuterJoin(
-              _db.accounts,
-              _db.accounts.id.equalsExp(_db.transactions.accountId),
-            ),
-            leftOuterJoin(
-              transferAccounts,
-              transferAccounts.id.equalsExp(_db.transactions.transferAccountId),
-            ),
-            leftOuterJoin(
-              _db.categories,
-              _db.categories.id.equalsExp(_db.transactions.categoryId),
-            ),
-          ])
-          ..where(_db.transactions.eventId.equals(eventId))
-          ..orderBy([OrderingTerm.desc(_db.transactions.transactionDate)]);
-
-    return query.watch().map((rows) {
-      return rows.map((row) {
-        return TransactionWithDetails(
-          transaction: row.readTable(_db.transactions),
-          account: row.readTable(_db.accounts),
-          category: row.readTable(_db.categories),
-          destinationAccount: row.readTableOrNull(transferAccounts),
-        );
-      }).toList();
-    });
-  }
-
-  // 4.3 Watch Transactions with Dynamic Filter
-  Stream<List<TransactionWithDetails>> watchTransactionsWithFilter({
-    DateTime? startDate,
-    DateTime? endDate,
-    int? categoryId,
-    int? accountId,
-    String? type,
-  }) {
-    final transferAccounts = _db.alias(
-      _db.accounts,
-      'transfer_accounts_filtered',
-    );
-    final query = _db.select(_db.transactions).join([
-      leftOuterJoin(
-        _db.accounts,
-        _db.accounts.id.equalsExp(_db.transactions.accountId),
-      ),
-      leftOuterJoin(
-        transferAccounts,
-        transferAccounts.id.equalsExp(_db.transactions.transferAccountId),
-      ),
-      leftOuterJoin(
-        _db.categories,
-        _db.categories.id.equalsExp(_db.transactions.categoryId),
-      ),
-    ]);
-
-    // Apply Filters
-    if (startDate != null && endDate != null) {
-      // Ensure end date covers the full day
-      final finalEnd = DateTime(
-        endDate.year,
-        endDate.month,
-        endDate.day,
-        23,
-        59,
-        59,
-      );
-      query.where(
-        _db.transactions.transactionDate.isBetweenValues(startDate, finalEnd),
-      );
-    }
-
-    if (categoryId != null) {
-      query.where(_db.transactions.categoryId.equals(categoryId));
-    }
-
-    if (accountId != null) {
-      query.where(
-        _db.transactions.accountId.equals(accountId) |
-            _db.transactions.transferAccountId.equals(accountId),
-      );
-    }
-
-    if (type != null) {
-      query.where(_db.transactions.type.equals(type));
-    }
-
-    query.orderBy([OrderingTerm.desc(_db.transactions.transactionDate)]);
-
-    return query.watch().map((rows) {
-      return rows.map((row) {
-        return TransactionWithDetails(
-          transaction: row.readTable(_db.transactions),
-          account: row.readTable(_db.accounts),
-          category: row.readTable(_db.categories),
-          destinationAccount: row.readTableOrNull(transferAccounts),
-        );
-      }).toList();
-    });
-  }
-
-  // 5. Watch Expense Breakdown
-  Stream<List<CategoryExpense>> watchExpenseBreakdown() {
-    final query = _db.select(_db.transactions).join([
-      innerJoin(
-        _db.categories,
-        _db.categories.id.equalsExp(_db.transactions.categoryId),
-      ),
-    ]);
-
-    query.where(_db.transactions.type.equals('Expense'));
-
-    return query.watch().map((rows) {
-      final Map<String, int> totals = {};
-
-      for (final row in rows) {
-        final category = row.readTable(_db.categories);
-        final transaction = row.readTable(_db.transactions);
-
-        final current = totals[category.name] ?? 0;
-        totals[category.name] = current + transaction.amount;
-      }
-
-      return totals.entries
-          .map(
-            (e) => CategoryExpense(categoryName: e.key, totalAmount: e.value),
-          )
-          .toList();
-    });
-  }
-
-  // 6. Watch Events with Spending (Budget vs Actual)
-  Stream<List<EventWithSpending>> watchEventsWithSpending() {
-    return _db.select(_db.events).watch().switchMap((events) {
-      if (events.isEmpty) return Stream.value([]);
-
-      // For each event, watch the sum of expenses
-      final streams = events.map((event) {
-        final query = _db.selectOnly(_db.transactions)
-          ..addColumns([_db.transactions.amount.sum()])
-          ..where(
-            _db.transactions.eventId.equals(event.id) &
-                _db.transactions.type.equals('Expense'),
-          );
-
-        return query.watchSingle().map((row) {
-          final spent = row.read(_db.transactions.amount.sum()) ?? 0;
-          return EventWithSpending(event: event, spentAmount: spent);
-        });
-      });
-
-      return Rx.combineLatestList(streams);
-    });
-  }
-
-  // 7. Create Event
-  Future<void> createEvent(EventsCompanion entry) async {
-    await _db.into(_db.events).insert(entry);
-  }
-
-  // 8. Get Active Events (for Dropdown)
-  Stream<List<Event>> watchActiveEvents() {
-    return (_db.select(
-      _db.events,
-    )..where((t) => t.status.equals('Active'))).watch();
-  }
-
-  // 8.0.5 Watch Single Event
-  Stream<Event> watchEventById(int id) {
-    return (_db.select(
-      _db.events,
-    )..where((t) => t.id.equals(id))).watchSingle();
-  }
-
-  // 8.1 Update Event (Safe Version using Write)
-  Future<void> updateEvent(EventsCompanion entry) async {
-    // We use .write() targeting the specific ID to avoid primary key conflicts
-    await (_db.update(
-      _db.events,
-    )..where((t) => t.id.equals(entry.id.value))).write(entry);
-  }
-
-  // 8.2 Delete Event (Safe)
-  Future<void> deleteEvent(int eventId) async {
-    await _db.transaction(() async {
-      // 1. Decouple Transactions (Set eventId = null)
-      await (_db.update(_db.transactions)
-            ..where((t) => t.eventId.equals(eventId)))
-          .write(const TransactionsCompanion(eventId: Value(null)));
-
-      // 2. Delete Event
-      await (_db.delete(_db.events)..where((t) => t.id.equals(eventId))).go();
-    });
-  }
-
-  // --- MEMBER & CASH LOG SECTION ---
-
-  // 9. Watch Members
-  Stream<List<Member>> watchMembers() {
-    return (_db.select(
-      _db.members,
-    )..orderBy([(t) => OrderingTerm.asc(t.name)])).watch();
-  }
-
-  // 10. Create Member (Low Level)
-  Future<void> createMember(MembersCompanion entry) async {
-    await _db.into(_db.members).insert(entry);
-  }
-
-  // 10.1 Add Member (Simple)
-  Future<int> addMember(String name, {String? phoneNumber}) async {
-    return await _db
-        .into(_db.members)
-        .insert(
-          MembersCompanion.insert(name: name, phoneNumber: phoneNumber ?? ''),
-        );
-  }
-
-  // 10.2 Update Member
-  Future<bool> updateMember(int id, String name, {String? phoneNumber}) async {
-    return await (_db.update(_db.members)..where((t) => t.id.equals(id))).write(
-          MembersCompanion(
-            name: Value(name),
-            phoneNumber: phoneNumber != null
-                ? Value(phoneNumber)
-                : const Value.absent(),
-          ),
-        ) >
-        0;
-  }
-
-  // 10.3 Delete Member (Cascade)
-  Future<int> deleteMember(int id) async {
-    return await _db.transaction(() async {
-      // 1. Delete Cash Logs for this member
-      await (_db.delete(
-        _db.cashLogs,
-      )..where((t) => t.memberId.equals(id))).go();
-
-      // 2. Delete Member
-      return await (_db.delete(
-        _db.members,
-      )..where((t) => t.id.equals(id))).go();
-    });
-  }
-
-  // 11. Cash Periods (NEW)
-  Stream<List<CashPeriod>> watchCashPeriods() {
-    return (_db.select(
-      _db.cashPeriods,
-    )..orderBy([(t) => OrderingTerm.desc(t.startDate)])).watch();
-  }
-
-  Future<void> createCashPeriod(CashPeriodsCompanion entry) async {
-    await _db.into(_db.cashPeriods).insert(entry);
-  }
-
-  // 12. Watch Cash Logs (Filtered by Period)
-  Stream<List<CashLog>> watchCashLogsByPeriod(int periodId) {
-    return (_db.select(
-      _db.cashLogs,
-    )..where((t) => t.periodId.equals(periodId))).watch();
-  }
-
-  Stream<int> watchCollectedCashForPeriod(int periodId) {
-    final query = _db.select(_db.cashLogs).join([
-      innerJoin(
-        _db.transactions,
-        _db.cashLogs.transactionId.equalsExp(_db.transactions.id),
-      ),
-    ]);
-
-    query.where(_db.cashLogs.periodId.equals(periodId));
-
-    return query.watch().map((rows) {
-      var total = 0;
-      for (final row in rows) {
-        final transaction = row.readTable(_db.transactions);
-        total += transaction.amount;
-      }
-      return total;
-    });
-  }
-
-  // Legacy/Fallback: Watch all cash logs
-  Stream<List<CashLog>> watchCashLogs() {
-    return _db.select(_db.cashLogs).watch();
-  }
-
-  // 13. Helper: Get or Create 'Uang Kas' Category
-  Future<int> getOrInsertCashCategory() async {
-    final existing = await (_db.select(
-      _db.categories,
-    )..where((tbl) => tbl.name.equals('Uang Kas'))).getSingleOrNull();
-
-    if (existing != null) return existing.id;
-
-    return await _db
-        .into(_db.categories)
-        .insert(CategoriesCompanion.insert(name: 'Uang Kas', type: 'Income'));
-  }
-
-  // 14. Pay Member Cash (Updated for PeriodId)
-  Future<void> payMemberCash({
-    required int memberId,
-    required String memberName,
-    String? periodLabel, // Optional if periodId provides name
-    int? periodId, // NEW
-    required int amount,
-    required int accountId,
-  }) async {
-    await _db.transaction(() async {
-      // 1. Ensure Category
-      final categoryId = await getOrInsertCashCategory();
-
-      // 2. Resolve Label
-      String pLabel = periodLabel ?? 'Unknown Period';
-      if (periodId != null && periodLabel == null) {
-        final p = await (_db.select(
-          _db.cashPeriods,
-        )..where((t) => t.id.equals(periodId))).getSingle();
-        pLabel = p.name;
-      }
-
-      // 3. Create Transaction
-      final transactionEntry = TransactionsCompanion.insert(
-        amount: amount,
-        type: 'Income',
-        transactionDate: DateTime.now(),
-        description: 'Kas $pLabel - $memberName',
-        accountId: accountId,
-        categoryId: categoryId,
-        memberId: Value(memberId),
-      );
-
-      final transactionId = await _db
-          .into(_db.transactions)
-          .insertReturning(transactionEntry);
-
-      // Update Balance
-      final account = await (_db.select(
-        _db.accounts,
-      )..where((tbl) => tbl.id.equals(accountId))).getSingle();
-
-      final newBalance = account.currentBalance + amount;
-
-      await (_db.update(_db.accounts)..where((tbl) => tbl.id.equals(accountId)))
-          .write(AccountsCompanion(currentBalance: Value(newBalance)));
-
-      // 4. Create CashLog Link
-      await _db
-          .into(_db.cashLogs)
-          .insert(
-            CashLogsCompanion.insert(
-              memberId: memberId,
-              transactionId: transactionId.id,
-              periodLabel: Value(pLabel),
-              periodId: Value(periodId),
-            ),
-          );
-    });
-  }
-
-  // 15. Void (Uncheck) Member Cash
-  Future<void> voidMemberCash({
-    required int memberId,
-    String? periodLabel,
-    int? periodId,
-  }) async {
-    await _db.transaction(() async {
-      // 1. Find the CashLog
-      CashLog? log;
-      if (periodId != null) {
-        log =
-            await (_db.select(_db.cashLogs)..where(
-                  (tbl) =>
-                      tbl.memberId.equals(memberId) &
-                      tbl.periodId.equals(periodId),
-                ))
-                .getSingleOrNull();
-      } else if (periodLabel != null) {
-        log =
-            await (_db.select(_db.cashLogs)..where(
-                  (tbl) =>
-                      tbl.memberId.equals(memberId) &
-                      tbl.periodLabel.equals(periodLabel),
-                ))
-                .getSingleOrNull();
-      }
-
-      if (log == null) return;
-
-      // 2. Find the Transaction to reverse balance
-      final transaction = await (_db.select(
-        _db.transactions,
-      )..where((tbl) => tbl.id.equals(log!.transactionId))).getSingle();
-
-      // 3. Reverse Balance
-      final account = await (_db.select(
-        _db.accounts,
-      )..where((tbl) => tbl.id.equals(transaction.accountId))).getSingle();
-
-      final newBalance = account.currentBalance - transaction.amount;
-
-      await (_db.update(_db.accounts)
-            ..where((tbl) => tbl.id.equals(transaction.accountId)))
-          .write(AccountsCompanion(currentBalance: Value(newBalance)));
-
-      // 4. Delete Transaction and Log
-      await (_db.delete(
-        _db.cashLogs,
-      )..where((tbl) => tbl.id.equals(log!.id))).go();
-      await (_db.delete(
-        _db.transactions,
-      )..where((tbl) => tbl.id.equals(transaction.id))).go();
-    });
-  }
-
-  // --- REPORT SECTION ---
-  // 15. Get Transactions by Date Range
-  Future<List<TransactionWithDetails>> getTransactionsByDateRange(
-    DateTime start,
-    DateTime end,
-  ) async {
-    // Ensure "end" covers the full day
-    final finalEnd = DateTime(end.year, end.month, end.day, 23, 59, 59);
-    final transferAccounts = _db.alias(
-      _db.accounts,
-      'transfer_accounts_report',
-    );
-
-    final query =
-        _db.select(_db.transactions).join([
-            leftOuterJoin(
-              _db.accounts,
-              _db.accounts.id.equalsExp(_db.transactions.accountId),
-            ),
-            leftOuterJoin(
-              transferAccounts,
-              transferAccounts.id.equalsExp(_db.transactions.transferAccountId),
-            ),
-            leftOuterJoin(
-              _db.categories,
-              _db.categories.id.equalsExp(_db.transactions.categoryId),
-            ),
-          ])
-          ..where(
-            _db.transactions.transactionDate.isBetweenValues(start, finalEnd),
-          )
-          ..orderBy([OrderingTerm.asc(_db.transactions.transactionDate)]);
-
-    final rows = await query.get();
-
-    return rows.map((row) {
-      return TransactionWithDetails(
-        transaction: row.readTable(_db.transactions),
-        account: row.readTable(_db.accounts),
-        category: row.readTable(_db.categories),
-        destinationAccount: row.readTableOrNull(transferAccounts),
-      );
-    }).toList();
-  }
-
-  // --- MASTER DATA CRUD ---
-
-  // Accounts
-  Stream<List<Account>> watchAccounts() {
-    return _db.select(_db.accounts).watch();
-  }
-
-  Future<void> createAccount(AccountsCompanion entry) async {
-    await _db.into(_db.accounts).insert(entry);
-  }
-
-  Future<void> updateAccount(AccountsCompanion entry) async {
-    await _db.update(_db.accounts).replace(entry);
-  }
-
-  Future<void> deleteAccountWithReplacement({
-    required int accountId,
-    required int replacementAccountId,
-  }) async {
-    if (accountId == replacementAccountId) {
-      throw Exception('Akun pengganti harus berbeda.');
-    }
-
-    await _db.transaction(() async {
-      final sourceAccount = await (_db.select(
-        _db.accounts,
-      )..where((t) => t.id.equals(accountId))).getSingle();
-
-      final replacementAccount = await (_db.select(
-        _db.accounts,
-      )..where((t) => t.id.equals(replacementAccountId))).getSingle();
-
-      await (_db.update(_db.transactions)
-            ..where((t) => t.accountId.equals(accountId)))
-          .write(
-            TransactionsCompanion(accountId: Value(replacementAccountId)),
-          );
-
-      await (_db.update(_db.transactions)
-            ..where((t) => t.transferAccountId.equals(accountId)))
-          .write(
-            TransactionsCompanion(
-              transferAccountId: Value(replacementAccountId),
-            ),
-          );
-
-      await (_db.update(_db.accounts)
-            ..where((t) => t.id.equals(replacementAccountId)))
-          .write(
-            AccountsCompanion(
-              currentBalance: Value(
-                replacementAccount.currentBalance + sourceAccount.currentBalance,
-              ),
-            ),
-          );
-
-      await (_db.delete(_db.accounts)..where((t) => t.id.equals(accountId))).go();
-    });
-  }
-
-  Future<void> deleteAccount(int id) async {
-    await (_db.delete(_db.accounts)..where((t) => t.id.equals(id))).go();
-  }
-
-  // Categories
-  Stream<List<Category>> watchCategories() {
-    return _db.select(_db.categories).watch();
-  }
-
-  Future<void> createCategory(CategoriesCompanion entry) async {
-    await _db.into(_db.categories).insert(entry);
-  }
-
-  Future<void> updateCategory(CategoriesCompanion entry) async {
-    await _db.update(_db.categories).replace(entry);
-  }
-
-  Future<void> deleteCategory(int id) async {
-    await (_db.delete(_db.categories)..where((t) => t.id.equals(id))).go();
-  }
-}
-
 class CategoryExpense {
   final String categoryName;
   final int totalAmount;
@@ -886,4 +33,691 @@ class EventWithSpending {
   final int spentAmount;
 
   EventWithSpending({required this.event, required this.spentAmount});
+}
+
+/// Checklist item untuk kas per periode (dari GET /api/cash/periods/:id/checklist).
+class CashChecklistItem {
+  final int memberId;
+  final String memberName;
+  final String phoneNumber;
+  final bool paid;
+  final int amount;
+  final int? transactionId;
+  final int? cashLogId;
+  final DateTime? paidAt;
+
+  CashChecklistItem({
+    required this.memberId,
+    required this.memberName,
+    required this.phoneNumber,
+    required this.paid,
+    required this.amount,
+    this.transactionId,
+    this.cashLogId,
+    this.paidAt,
+  });
+}
+
+class CashChecklist {
+  final CashPeriod period;
+  final List<CashChecklistItem> items;
+  final int totalMembers;
+  final int paidCount;
+  final int unpaidCount;
+  final int totalCollected;
+
+  CashChecklist({
+    required this.period,
+    required this.items,
+    required this.totalMembers,
+    required this.paidCount,
+    required this.unpaidCount,
+    required this.totalCollected,
+  });
+}
+
+class TransactionRepository {
+  static const String transferType = 'Transfer';
+  static const String transferCategoryName = 'Transfer Antar Rekening';
+
+  final ApiClient _api = ApiClient.instance;
+
+  // ============ Mappers JSON → Drift model ============
+
+  Account _mapAccount(Map<String, dynamic> m) => Account(
+        id: (m['id'] as num).toInt(),
+        name: (m['name'] ?? '') as String,
+        type: (m['type'] ?? 'Bank') as String,
+        initialBalance: (m['initialBalance'] as num?)?.toInt() ?? 0,
+        currentBalance: (m['currentBalance'] as num?)?.toInt() ??
+            (m['balance'] as num?)?.toInt() ??
+            0,
+        iconKey: (m['iconKey'] as String?) ?? 'default',
+      );
+
+  Category _mapCategory(Map<String, dynamic> m) => Category(
+        id: (m['id'] as num).toInt(),
+        name: (m['name'] ?? '') as String,
+        type: (m['type'] ?? 'Expense') as String,
+        iconKey: (m['iconKey'] as String?) ?? 'default',
+      );
+
+  Member _mapMember(Map<String, dynamic> m) => Member(
+        id: (m['id'] as num).toInt(),
+        name: (m['name'] ?? '') as String,
+        phoneNumber: (m['phoneNumber'] as String?) ?? '',
+      );
+
+  Event _mapEvent(Map<String, dynamic> m) => Event(
+        id: (m['id'] as num).toInt(),
+        name: (m['name'] ?? '') as String,
+        budgetLimit: (m['budgetLimit'] as num?)?.toInt() ?? 0,
+        status: (m['status'] ?? 'Active') as String,
+        startDate: _parseDate(m['startDate']) ?? DateTime.now(),
+        endDate: _parseDate(m['endDate']),
+      );
+
+  CashPeriod _mapCashPeriod(Map<String, dynamic> m) => CashPeriod(
+        id: (m['id'] as num).toInt(),
+        name: (m['name'] ?? '') as String,
+        startDate: _parseDate(m['startDate']) ?? DateTime.now(),
+        endDate: _parseDate(m['endDate']) ?? DateTime.now(),
+        status: (m['status'] ?? 'Active') as String,
+        createdAt: _parseDate(m['createdAt']) ?? DateTime.now(),
+      );
+
+  CashLog _mapCashLog(Map<String, dynamic> m) {
+    final period = m['period'] as Map<String, dynamic>?;
+    return CashLog(
+      id: (m['id'] as num).toInt(),
+      memberId: (m['memberId'] as num).toInt(),
+      transactionId: (m['transactionId'] as num).toInt(),
+      periodLabel:
+          (m['periodLabel'] as String?) ?? (period?['name'] as String?),
+      periodId: m['periodId'] as int?,
+    );
+  }
+
+  Transaction _mapTransaction(Map<String, dynamic> m) {
+    return Transaction(
+      id: (m['id'] as num).toInt(),
+      amount: (m['amount'] as num).toInt(),
+      type: (m['type'] ?? 'Expense') as String,
+      transactionDate: _parseDate(m['transactionDate']) ?? DateTime.now(),
+      description: (m['description'] as String?) ?? '',
+      accountId: (m['accountId'] as num).toInt(),
+      transferAccountId: m['transferAccountId'] as int?,
+      categoryId: (m['categoryId'] as num).toInt(),
+      eventId: m['eventId'] as int?,
+      memberId: m['memberId'] as int?,
+      proofImage: m['proofImage'] as String?,
+    );
+  }
+
+  TransactionWithDetails _mapTxWithDetails(Map<String, dynamic> m) {
+    return TransactionWithDetails(
+      transaction: _mapTransaction(m),
+      account: _mapAccount(m['account'] as Map<String, dynamic>),
+      category: _mapCategory(m['category'] as Map<String, dynamic>),
+      destinationAccount: m['transferAccount'] != null
+          ? _mapAccount(m['transferAccount'] as Map<String, dynamic>)
+          : null,
+    );
+  }
+
+  DateTime? _parseDate(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
+    if (v is String) {
+      try {
+        return DateTime.parse(v);
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  // ============ Dashboard ============
+
+  Future<DashboardSummary> getDashboardSummary() async {
+    final res = await _api.get('/api/dashboard/summary');
+    final d = res['data'] as Map<String, dynamic>;
+    return DashboardSummary(
+      totalBalance: (d['totalBalance'] as num).toInt(),
+      totalIncome: (d['totalIncome'] as num).toInt(),
+      totalExpense: (d['totalExpense'] as num).toInt(),
+    );
+  }
+
+  Future<List<Account>> getAccountsForHero() async {
+    final res = await _api.get('/api/dashboard/summary');
+    final list = (res['data']['accounts'] as List)
+        .map((e) => Account(
+              id: (e['id'] as num).toInt(),
+              name: (e['name'] ?? '') as String,
+              type: (e['type'] ?? 'Bank') as String,
+              initialBalance: 0,
+              currentBalance: (e['balance'] as num).toInt(),
+              iconKey: 'default',
+            ))
+        .toList();
+    return list;
+  }
+
+  // ============ Accounts ============
+
+  Future<List<Account>> watchAccounts() async {
+    final res = await _api.get('/api/accounts');
+    final list = (res['data']['accounts'] as List)
+        .map((e) => _mapAccount(e as Map<String, dynamic>))
+        .toList();
+    return list;
+  }
+
+  Future<Account> createAccount({
+    required String name,
+    required String type,
+    int initialBalance = 0,
+    String iconKey = 'default',
+  }) async {
+    final res = await _api.post('/api/accounts', body: {
+      'name': name,
+      'type': type,
+      'initialBalance': initialBalance,
+      'currentBalance': initialBalance,
+      'iconKey': iconKey,
+    });
+    return _mapAccount(res['data']['account'] as Map<String, dynamic>);
+  }
+
+  Future<void> updateAccount({
+    required int id,
+    required String name,
+    required String type,
+    int? initialBalance,
+    int? currentBalance,
+    String? iconKey,
+  }) async {
+    await _api.patch('/api/accounts/$id', body: {
+      'name': name,
+      'type': type,
+      if (initialBalance != null) 'initialBalance': initialBalance,
+      if (currentBalance != null) 'currentBalance': currentBalance,
+      if (iconKey != null) 'iconKey': iconKey,
+    });
+  }
+
+  Future<void> deleteAccount(int id) async {
+    await _api.delete('/api/accounts/$id');
+  }
+
+  // ============ Categories ============
+
+  Future<List<Category>> watchCategories() async {
+    final res = await _api.get('/api/categories');
+    final list = (res['data']['categories'] as List)
+        .map((e) => _mapCategory(e as Map<String, dynamic>))
+        .toList();
+    return list;
+  }
+
+  Future<Category> createCategory({
+    required String name,
+    required String type,
+    String iconKey = 'default',
+  }) async {
+    final res = await _api.post('/api/categories', body: {
+      'name': name,
+      'type': type,
+      'iconKey': iconKey,
+    });
+    return _mapCategory(res['data']['category'] as Map<String, dynamic>);
+  }
+
+  Future<void> updateCategory({
+    required int id,
+    String? name,
+    String? type,
+    String? iconKey,
+  }) async {
+    await _api.patch('/api/categories/$id', body: {
+      if (name != null) 'name': name,
+      if (type != null) 'type': type,
+      if (iconKey != null) 'iconKey': iconKey,
+    });
+  }
+
+  Future<void> deleteCategory(int id) async {
+    await _api.delete('/api/categories/$id');
+  }
+
+  Future<int> getOrInsertTransferCategory() async {
+    final cats = await watchCategories();
+    final existing = cats.firstWhere(
+      (c) => c.name == transferCategoryName && c.type == transferType,
+      orElse: () => Category(
+          id: 0, name: '', type: '', iconKey: 'default'),
+    );
+    if (existing.id != 0) return existing.id;
+    final created = await createCategory(
+      name: transferCategoryName,
+      type: transferType,
+    );
+    return created.id;
+  }
+
+  Future<void> ensureTransferCategoryExists() async {
+    await getOrInsertTransferCategory();
+  }
+
+  // ============ Members ============
+
+  Future<List<Member>> watchMembers() async {
+    final res = await _api.get('/api/members');
+    final list = (res['data']['members'] as List)
+        .map((e) => _mapMember(e as Map<String, dynamic>))
+        .toList();
+    // sort by name (backend mungkin urut beda)
+    list.sort((a, b) => a.name.compareTo(b.name));
+    return list;
+  }
+
+  Future<Member> createMember({
+    required String name,
+    String phoneNumber = '',
+  }) async {
+    final res = await _api.post('/api/members', body: {
+      'name': name,
+      'phoneNumber': phoneNumber,
+    });
+    return _mapMember(res['data']['member'] as Map<String, dynamic>);
+  }
+
+  Future<int> addMember(String name, {String? phoneNumber}) async {
+    final m = await createMember(name: name, phoneNumber: phoneNumber ?? '');
+    return m.id;
+  }
+
+  Future<bool> updateMember(int id, String name, {String? phoneNumber}) async {
+    await _api.patch('/api/members/$id', body: {
+      'name': name,
+      if (phoneNumber != null) 'phoneNumber': phoneNumber,
+    });
+    return true;
+  }
+
+  Future<int> deleteMember(int id) async {
+    await _api.delete('/api/members/$id');
+    return 1;
+  }
+
+  // ============ Events ============
+
+  Future<List<Event>> watchActiveEvents() async {
+    final res = await _api.get('/api/events', q: {'status': 'Active'});
+    final list = (res['data']['events'] as List)
+        .map((e) => _mapEvent(e as Map<String, dynamic>))
+        .toList();
+    return list;
+  }
+
+  Future<List<Event>> watchAllEvents() async {
+    final res = await _api.get('/api/events');
+    final list = (res['data']['events'] as List)
+        .map((e) => _mapEvent(e as Map<String, dynamic>))
+        .toList();
+    return list;
+  }
+
+  Future<Event> watchEventById(int id) async {
+    final res = await _api.get('/api/events/$id');
+    return _mapEvent(res['data']['event'] as Map<String, dynamic>);
+  }
+
+  Future<Event> createEvent({
+    required String name,
+    int budgetLimit = 0,
+    String status = 'Active',
+    required DateTime startDate,
+    DateTime? endDate,
+  }) async {
+    final res = await _api.post('/api/events', body: {
+      'name': name,
+      'budgetLimit': budgetLimit,
+      'status': status,
+      'startDate': startDate.toUtc().toIso8601String(),
+      'endDate': endDate?.toUtc().toIso8601String(),
+    });
+    return _mapEvent(res['data']['event'] as Map<String, dynamic>);
+  }
+
+  Future<void> updateEvent({
+    required int id,
+    String? name,
+    int? budgetLimit,
+    String? status,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    await _api.patch('/api/events/$id', body: {
+      if (name != null) 'name': name,
+      if (budgetLimit != null) 'budgetLimit': budgetLimit,
+      if (status != null) 'status': status,
+      if (startDate != null) 'startDate': startDate.toUtc().toIso8601String(),
+      if (endDate != null) 'endDate': endDate.toUtc().toIso8601String(),
+    });
+  }
+
+  Future<void> deleteEvent(int eventId) async {
+    await _api.delete('/api/events/$eventId');
+  }
+
+  Future<List<EventWithSpending>> watchEventsWithSpending() async {
+    final events = await watchAllEvents();
+    if (events.isEmpty) return [];
+    // Fetch all expense transactions (sampai 200) lalu group by eventId.
+    final res = await _api.get('/api/transactions', q: {
+      'type': 'Expense',
+      'limit': '200',
+    });
+    final txs = (res['data']['transactions'] as List)
+        .where((t) => (t as Map<String, dynamic>)['eventId'] != null)
+        .toList();
+    final spent = <int, int>{};
+    for (final t in txs) {
+      final eid = (t as Map<String, dynamic>)['eventId'] as int;
+      spent[eid] = (spent[eid] ?? 0) + (t['amount'] as num).toInt();
+    }
+    return events
+        .map((e) => EventWithSpending(event: e, spentAmount: spent[e.id] ?? 0))
+        .toList();
+  }
+
+  // ============ Transactions ============
+
+  Future<List<TransactionWithDetails>> watchRecentTransactions() async {
+    final res = await _api.get('/api/transactions', q: {'limit': '50'});
+    final list = (res['data']['transactions'] as List)
+        .map((e) => _mapTxWithDetails(e as Map<String, dynamic>))
+        .toList();
+    return list;
+  }
+
+  Future<List<TransactionWithDetails>> watchTransactionsByAccount(
+    int accountId,
+  ) async {
+    final res = await _api.get('/api/transactions', q: {
+      'accountId': accountId.toString(),
+      'limit': '200',
+    });
+    // Backend filter hanya accountId; transfer masuk via transferAccountId
+    // tidak ter-cover filter tunggal → kita juga ambil lalu saring lokal.
+    final list = (res['data']['transactions'] as List)
+        .map((e) => _mapTxWithDetails(e as Map<String, dynamic>))
+        .where((t) =>
+            t.transaction.accountId == accountId ||
+            t.transaction.transferAccountId == accountId)
+        .toList();
+    return list;
+  }
+
+  Future<List<TransactionWithDetails>> watchTransactionsByEvent(int eventId) async {
+    final res = await _api.get('/api/transactions', q: {
+      'eventId': eventId.toString(),
+      'limit': '200',
+    });
+    final list = (res['data']['transactions'] as List)
+        .map((e) => _mapTxWithDetails(e as Map<String, dynamic>))
+        .toList();
+    return list;
+  }
+
+  Future<List<TransactionWithDetails>> watchTransactionsWithFilter({
+    DateTime? startDate,
+    DateTime? endDate,
+    int? categoryId,
+    int? accountId,
+    String? type,
+  }) async {
+    final q = <String, String>{
+      'limit': '200',
+      if (type != null) 'type': type,
+      if (categoryId != null) 'categoryId': categoryId.toString(),
+      if (accountId != null) 'accountId': accountId.toString(),
+      if (startDate != null)
+        'startDate': startDate.toUtc().toIso8601String(),
+      if (endDate != null) 'endDate': endDate.toUtc().toIso8601String(),
+    };
+    final res = await _api.get('/api/transactions', q: q);
+    final list = (res['data']['transactions'] as List)
+        .map((e) => _mapTxWithDetails(e as Map<String, dynamic>))
+        .toList();
+    return list;
+  }
+
+  Future<List<TransactionWithDetails>> getTransactionsByDateRange(
+    DateTime start,
+    DateTime end,
+  ) async {
+    return watchTransactionsWithFilter(startDate: start, endDate: end);
+  }
+
+  Future<Transaction> createTransaction({
+    required int amount,
+    required String type,
+    required DateTime transactionDate,
+    String description = '',
+    required int accountId,
+    required int categoryId,
+    int? transferAccountId,
+    int? eventId,
+    int? memberId,
+    String? proofImage,
+  }) async {
+    final res = await _api.post('/api/transactions', body: {
+      'amount': amount,
+      'type': type,
+      'transactionDate': transactionDate.toUtc().toIso8601String(),
+      'description': description,
+      'accountId': accountId,
+      'categoryId': categoryId,
+      if (transferAccountId != null) 'transferAccountId': transferAccountId,
+      if (eventId != null) 'eventId': eventId,
+      if (memberId != null) 'memberId': memberId,
+      'proofImage': null, // upload gambar belum didukung; selalu null
+    });
+    return _mapTransaction(res['data']['transaction'] as Map<String, dynamic>);
+  }
+
+  Future<void> updateTransaction({
+    required int id,
+    required int amount,
+    required String type,
+    required DateTime transactionDate,
+    String description = '',
+    required int accountId,
+    required int categoryId,
+    int? transferAccountId,
+    int? eventId,
+    int? memberId,
+  }) async {
+    await _api.patch('/api/transactions/$id', body: {
+      'amount': amount,
+      'type': type,
+      'transactionDate': transactionDate.toUtc().toIso8601String(),
+      'description': description,
+      'accountId': accountId,
+      'categoryId': categoryId,
+      if (transferAccountId != null) 'transferAccountId': transferAccountId,
+      if (eventId != null) 'eventId': eventId,
+      if (memberId != null) 'memberId': memberId,
+      'proofImage': null,
+    });
+  }
+
+  Future<void> deleteTransaction(int id) async {
+    await _api.delete('/api/transactions/$id');
+  }
+
+  // ============ Expense Breakdown (chart) ============
+
+  Future<List<CategoryExpense>> watchExpenseBreakdown() async {
+    final res = await _api.get('/api/dashboard/by-category', q: {'type': 'Expense'});
+    final list = (res['data']['breakdown'] as List)
+        .map((e) => CategoryExpense(
+              categoryName: (e as Map<String, dynamic>)['category'] as String,
+              totalAmount: (e['total'] as num).toInt(),
+            ))
+        .toList();
+    return list;
+  }
+
+  // ============ Cash Periods & Logs ============
+
+  Future<List<CashPeriod>> watchCashPeriods() async {
+    final res = await _api.get('/api/cash/periods');
+    final list = (res['data']['periods'] as List)
+        .map((e) => _mapCashPeriod(e as Map<String, dynamic>))
+        .toList();
+    return list;
+  }
+
+  Future<CashPeriod> createCashPeriod({
+    required String name,
+    required DateTime startDate,
+    required DateTime endDate,
+    String status = 'Active',
+  }) async {
+    final res = await _api.post('/api/cash/periods', body: {
+      'name': name,
+      'startDate': startDate.toUtc().toIso8601String(),
+      'endDate': endDate.toUtc().toIso8601String(),
+      'status': status,
+    });
+    return _mapCashPeriod(res['data']['period'] as Map<String, dynamic>);
+  }
+
+  Future<void> updateCashPeriod({
+    required int id,
+    String? name,
+    DateTime? startDate,
+    DateTime? endDate,
+    String? status,
+  }) async {
+    await _api.patch('/api/cash/periods/$id', body: {
+      if (name != null) 'name': name,
+      if (startDate != null) 'startDate': startDate.toUtc().toIso8601String(),
+      if (endDate != null) 'endDate': endDate.toUtc().toIso8601String(),
+      if (status != null) 'status': status,
+    });
+  }
+
+  Future<void> deleteCashPeriod(int id) async {
+    await _api.delete('/api/cash/periods/$id');
+  }
+
+  Future<List<CashLog>> watchCashLogs() async {
+    final res = await _api.get('/api/cash/logs');
+    final list = (res['data']['cashLogs'] as List)
+        .map((e) => _mapCashLog(e as Map<String, dynamic>))
+        .toList();
+    return list;
+  }
+
+  Future<List<CashLog>> watchCashLogsByPeriod(int periodId) async {
+    final res = await _api.get('/api/cash/logs', q: {'periodId': periodId.toString()});
+    final list = (res['data']['cashLogs'] as List)
+        .map((e) => _mapCashLog(e as Map<String, dynamic>))
+        .toList();
+    return list;
+  }
+
+  Future<int> watchCollectedCashForPeriod(int periodId) async {
+    final res = await _api.get('/api/cash/periods/$periodId/checklist');
+    return (res['data']['summary']['totalCollected'] as num).toInt();
+  }
+
+  /// Checklist lengkap per periode (anggota + status bayar).
+  Future<CashChecklist> getChecklist(int periodId) async {
+    final res = await _api.get('/api/cash/periods/$periodId/checklist');
+    final d = res['data'] as Map<String, dynamic>;
+    final period = _mapCashPeriod(d['period'] as Map<String, dynamic>);
+    final items = (d['checklist'] as List)
+        .map((e) {
+          final m = e as Map<String, dynamic>;
+          return CashChecklistItem(
+            memberId: (m['memberId'] as num).toInt(),
+            memberName: (m['memberName'] ?? '') as String,
+            phoneNumber: (m['phoneNumber'] as String?) ?? '',
+            paid: m['paid'] as bool,
+            amount: (m['amount'] as num?)?.toInt() ?? 0,
+            transactionId: (m['transactionId'] as num?)?.toInt(),
+            cashLogId: (m['cashLogId'] as num?)?.toInt(),
+            paidAt: _parseDate(m['paidAt']),
+          );
+        })
+        .toList();
+    final s = d['summary'] as Map<String, dynamic>;
+    return CashChecklist(
+      period: period,
+      items: items,
+      totalMembers: (s['totalMembers'] as num).toInt(),
+      paidCount: (s['paidCount'] as num).toInt(),
+      unpaidCount: (s['unpaidCount'] as num).toInt(),
+      totalCollected: (s['totalCollected'] as num).toInt(),
+    );
+  }
+
+  Future<int> getOrInsertCashCategory() async {
+    final cats = await watchCategories();
+    final existing = cats.firstWhere(
+      (c) => c.name == 'Uang Kas',
+      orElse: () => Category(id: 0, name: '', type: '', iconKey: 'default'),
+    );
+    if (existing.id != 0) return existing.id;
+    final created = await createCategory(name: 'Uang Kas', type: 'Income');
+    return created.id;
+  }
+
+  /// Anggota membayar kas: POST /api/cash/pay.
+  Future<void> payMemberCash({
+    required int memberId,
+    required String memberName,
+    String? periodLabel,
+    int? periodId,
+    required int amount,
+    required int accountId,
+  }) async {
+    final categoryId = await getOrInsertCashCategory();
+    String label = periodLabel ?? 'Periode';
+    if (periodId != null && periodLabel == null) {
+      // label dari period name tidak wajib; backend pakai periodId
+    }
+    await _api.post('/api/cash/pay', body: {
+      'memberId': memberId,
+      'periodId': periodId,
+      'amount': amount,
+      'accountId': accountId,
+      'categoryId': categoryId,
+      'description': 'Kas $label - $memberName',
+    });
+  }
+
+  /// Batalkan pembayaran kas: DELETE /api/cash/logs/:id (reverse saldo).
+  Future<void> voidMemberCash({
+    required int memberId,
+    String? periodLabel,
+    int? periodId,
+  }) async {
+    // Cari cashLog untuk member+period
+    final res = await _api.get('/api/cash/logs', q: {
+      'periodId': periodId?.toString() ?? '',
+      'memberId': memberId.toString(),
+    });
+    final logs = (res['data']['cashLogs'] as List);
+    if (logs.isEmpty) return;
+    final log = logs.first as Map<String, dynamic>;
+    await _api.delete('/api/cash/logs/${log['id']}');
+  }
 }

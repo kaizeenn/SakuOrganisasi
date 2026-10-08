@@ -1,0 +1,163 @@
+// Prisma schema untuk SakuOrganisasi backend.
+// Mengacu pada struktur tabel aplikasi Flutter (lib/database/tables.dart)
+// dengan tambahan tabel User untuk login multi-user + audit trail.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// USER & AUTH (multi-user)
+// ============================================================
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  username     String   @unique
+  passwordHash String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relasi audit trail
+  transactionsCreated Transaction[] @relation("TransactionCreatedBy")
+  cashLogsCreated     CashLog[]     @relation("CashLogCreatedBy")
+  cashPeriodsCreated  CashPeriod[]  @relation("CashPeriodCreatedBy")
+
+  @@index([username])
+}
+
+// ============================================================
+// MASTER DATA (sesuai tabel Flutter)
+// ============================================================
+
+model Account {
+  id             Int      @id @default(autoincrement())
+  name           String
+  type           String // Bank | E-Wallet | Cash
+  initialBalance Int      @default(0)
+  currentBalance Int      @default(0)
+  iconKey        String   @default("default")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  transactions          Transaction[] @relation("TransactionAccount")
+  transferTransactions  Transaction[] @relation("TransactionTransferAccount")
+}
+
+model Category {
+  id       Int      @id @default(autoincrement())
+  name     String
+  type     String // Income | Expense | Transfer
+  iconKey  String   @default("default")
+  createdAt DateTime @default(now())
+
+  transactions Transaction[]
+}
+
+model Event {
+  id          Int       @id @default(autoincrement())
+  name        String
+  budgetLimit Int       @default(0)
+  status      String    @default("Active") // Active | Finished
+  startDate   DateTime
+  endDate     DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  transactions Transaction[]
+}
+
+model Member {
+  id          Int      @id @default(autoincrement())
+  name        String
+  phoneNumber String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cashLogs CashLog[]
+  transactions Transaction[]
+}
+
+// ============================================================
+// TRANSAKSI
+// ============================================================
+
+model Transaction {
+  id               Int       @id @default(autoincrement())
+  amount           Int
+  type             String // Income | Expense | Transfer
+  transactionDate  DateTime
+  description      String    @default("")
+  proofImage       String?
+
+  accountId        Int
+  account          Account   @relation("TransactionAccount", fields: [accountId], references: [id])
+  transferAccountId Int?
+  transferAccount  Account?  @relation("TransactionTransferAccount", fields: [transferAccountId], references: [id])
+  categoryId       Int
+  category         Category  @relation(fields: [categoryId], references: [id])
+  eventId          Int?
+  event            Event?    @relation(fields: [eventId], references: [id])
+  memberId         Int?
+  member           Member?   @relation(fields: [memberId], references: [id])
+
+  // Audit trail: siapa bendahara yang input
+  createdByUserId  Int
+  createdBy        User      @relation("TransactionCreatedBy", fields: [createdByUserId], references: [id])
+
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  cashLogs CashLog[]
+
+  @@index([accountId])
+  @@index([categoryId])
+  @@index([eventId])
+  @@index([memberId])
+  @@index([transactionDate])
+}
+
+// ============================================================
+// KAS ANGGOTA
+// ============================================================
+
+model CashPeriod {
+  id         Int      @id @default(autoincrement())
+  name       String // "Januari 2026", "Minggu 1", "Event X"
+  startDate  DateTime
+  endDate    DateTime
+  status     String   @default("Active") // Active | Closed
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  createdByUserId Int?
+  createdBy       User? @relation("CashPeriodCreatedBy", fields: [createdByUserId], references: [id])
+
+  cashLogs CashLog[]
+}
+
+model CashLog {
+  id            Int      @id @default(autoincrement())
+  memberId      Int
+  member        Member   @relation(fields: [memberId], references: [id])
+  transactionId Int
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
+  periodLabel   String?  // legacy label (deprecated)
+  periodId      Int?
+  period        CashPeriod? @relation(fields: [periodId], references: [id])
+
+  createdByUserId Int
+  createdBy       User @relation("CashLogCreatedBy", fields: [createdByUserId], references: [id])
+
+  createdAt    DateTime @default(now())
+
+  @@unique([memberId, periodId])
+  @@index([periodId])
+  @@index([memberId])
+}
