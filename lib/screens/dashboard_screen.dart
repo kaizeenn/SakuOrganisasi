@@ -175,28 +175,41 @@ class DashboardScreen extends ConsumerWidget {
               SectionHeader(
                 title: 'Detail Pengeluaran',
                 subtitle: 'Distribusi per kategori',
-                action: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: expenseRange.key,
-                    isDense: true,
-                    icon: Icon(Icons.keyboard_arrow_down_rounded, color: p.textMuted),
-                    style: context.texts.labelMedium?.copyWith(
-                      color: p.brand,
-                      fontWeight: FontWeight.w700,
+                action: InkWell(
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
+                  onTap: () async {
+                    final selected = await showDialog<ExpenseChartRange>(
+                      context: context,
+                      builder: (_) => _ExpensePeriodDialog(initial: expenseRange),
+                    );
+                    if (selected != null && context.mounted) {
+                      ref.read(expenseChartRangeProvider.notifier).state = selected;
+                    }
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: p.brand.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
                     ),
-                    items: const [
-                      DropdownMenuItem(value: 'current', child: Text('Bulan ini')),
-                      DropdownMenuItem(value: 'previous', child: Text('Bulan lalu')),
-                      DropdownMenuItem(value: 'three_months', child: Text('3 bulan terakhir')),
-                      DropdownMenuItem(value: 'year', child: Text('Tahun ini')),
-                      DropdownMenuItem(value: 'all', child: Text('Semua histori')),
-                    ],
-                    onChanged: (value) {
-                      if (value != null) {
-                        ref.read(expenseChartRangeProvider.notifier).state =
-                            ExpenseChartRange.fromKey(value);
-                      }
-                    },
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 125),
+                          child: Text(
+                            expenseRange.label,
+                            overflow: TextOverflow.ellipsis,
+                            style: context.texts.labelMedium?.copyWith(
+                              color: p.brand,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                        Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: p.brand),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -205,7 +218,7 @@ class DashboardScreen extends ConsumerWidget {
                 child: expenseAsync.when(
                   data: (expenses) {
                     if (expenses.isEmpty) {
-                      final isCurrentMonth = expenseRange.key == 'current';
+                      final isCurrentMonth = expenseRange.isCurrentMonth;
                       return SizedBox(
                         height: 140,
                         child: Center(
@@ -523,6 +536,107 @@ class _HeroStat extends StatelessWidget {
               fontWeight: FontWeight.w700,
             ),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ExpensePeriodDialog extends StatefulWidget {
+  final ExpenseChartRange initial;
+
+  const _ExpensePeriodDialog({required this.initial});
+
+  @override
+  State<_ExpensePeriodDialog> createState() => _ExpensePeriodDialogState();
+}
+
+class _ExpensePeriodDialogState extends State<_ExpensePeriodDialog> {
+  late int _year;
+  late int _month;
+  late bool _allHistory;
+
+  @override
+  void initState() {
+    super.initState();
+    final date = widget.initial.startDate ?? DateTime.now();
+    _year = date.year;
+    _month = date.month;
+    _allHistory = widget.initial.key == 'all';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    final monthName = DateFormat('MMMM', 'id_ID').format(DateTime(2020, _month));
+    final years = [
+      for (var year = DateTime.now().year + 1; year >= 2020; year--) year,
+    ];
+
+    return AlertDialog(
+      title: const Text('Pilih periode pengeluaran'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _allHistory,
+            title: const Text('Semua histori'),
+            subtitle: const Text('Tampilkan seluruh transaksi'),
+            onChanged: (value) => setState(() => _allHistory = value ?? false),
+          ),
+          if (!_allHistory) ...[
+            const SizedBox(height: 12),
+            Text('Bulan dan tahun', style: context.texts.labelMedium?.copyWith(color: p.textMuted)),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<int>(
+                    initialValue: _month,
+                    decoration: const InputDecoration(isDense: true),
+                    items: [
+                      for (var month = 1; month <= 12; month++)
+                        DropdownMenuItem(
+                          value: month,
+                          child: Text(DateFormat('MMMM', 'id_ID').format(DateTime(2020, month))),
+                        ),
+                    ],
+                    onChanged: (value) => setState(() => _month = value ?? _month),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 105,
+                  child: DropdownButtonFormField<int>(
+                    initialValue: _year,
+                    decoration: const InputDecoration(isDense: true),
+                    items: [
+                      for (final year in years)
+                        DropdownMenuItem(value: year, child: Text('$year')),
+                    ],
+                    onChanged: (value) => setState(() => _year = value ?? _year),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text('Dipilih: $monthName $_year', style: context.texts.bodySmall?.copyWith(color: p.textMuted)),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Batal'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(
+            context,
+            _allHistory ? ExpenseChartRange.allHistory : ExpenseChartRange.forMonth(_year, _month),
+          ),
+          child: const Text('Terapkan'),
         ),
       ],
     );

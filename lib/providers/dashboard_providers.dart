@@ -65,43 +65,16 @@ class ExpenseChartRange {
 
   factory ExpenseChartRange.currentMonth() {
     final now = DateTime.now();
-    return ExpenseChartRange(
-      key: 'current',
-      label: DateFormat('MMMM yyyy', 'id_ID').format(now),
-      startDate: DateTime(now.year, now.month, 1),
-      endDate: DateTime(now.year, now.month + 1, 0, 23, 59, 59),
-    );
+    return ExpenseChartRange.forMonth(now.year, now.month);
   }
 
-  static ExpenseChartRange previousMonth() {
-    final now = DateTime.now();
-    final month = DateTime(now.year, now.month - 1, 1);
+  factory ExpenseChartRange.forMonth(int year, int month) {
+    final firstDay = DateTime(year, month, 1);
     return ExpenseChartRange(
-      key: 'previous',
-      label: DateFormat('MMMM yyyy', 'id_ID').format(month),
-      startDate: month,
-      endDate: DateTime(month.year, month.month + 1, 0, 23, 59, 59),
-    );
-  }
-
-  static ExpenseChartRange lastThreeMonths() {
-    final now = DateTime.now();
-    final start = DateTime(now.year, now.month - 2, 1);
-    return ExpenseChartRange(
-      key: 'three_months',
-      label: '3 bulan terakhir',
-      startDate: start,
-      endDate: DateTime(now.year, now.month + 1, 0, 23, 59, 59),
-    );
-  }
-
-  static ExpenseChartRange currentYear() {
-    final now = DateTime.now();
-    return ExpenseChartRange(
-      key: 'year',
-      label: 'Tahun ${now.year}',
-      startDate: DateTime(now.year, 1, 1),
-      endDate: DateTime(now.year, 12, 31, 23, 59, 59),
+      key: 'month_${year}_$month',
+      label: DateFormat('MMMM yyyy', 'id_ID').format(firstDay),
+      startDate: firstDay,
+      endDate: DateTime(year, month + 1, 0, 23, 59, 59),
     );
   }
 
@@ -110,20 +83,9 @@ class ExpenseChartRange {
     label: 'Semua histori',
   );
 
-  static ExpenseChartRange fromKey(String key) {
-    switch (key) {
-      case 'previous':
-        return previousMonth();
-      case 'three_months':
-        return lastThreeMonths();
-      case 'year':
-        return currentYear();
-      case 'all':
-        return allHistory;
-      case 'current':
-      default:
-        return ExpenseChartRange.currentMonth();
-    }
+  bool get isCurrentMonth {
+    final now = DateTime.now();
+    return startDate?.year == now.year && startDate?.month == now.month;
   }
 }
 
