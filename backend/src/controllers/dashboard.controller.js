@@ -50,15 +50,26 @@ const summary = asyncHandler(async (req, res) => {
 
 // Ringkasan per kategori (expense breakdown) untuk chart
 const byCategory = asyncHandler(async (req, res) => {
-  const { startDate, endDate, type = 'Expense' } = req.query;
+  const { startDate, endDate, allHistory, type = 'Expense' } = req.query;
+  // Default dashboard: bulan berjalan. Mode semua histori harus eksplisit
+  // agar grafik Home tetap relevan untuk monitoring bulan aktif.
   const now = new Date();
   const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const start = startDate ? new Date(startDate) : firstOfMonth;
-  const end = endDate ? new Date(endDate) : new Date();
+  const dateFilter = allHistory === 'true'
+    ? {}
+    : {
+        gte: startDate ? new Date(startDate) : firstOfMonth,
+        lte: endDate ? new Date(endDate) : now,
+      };
 
   const rows = await prisma.transaction.groupBy({
     by: ['categoryId'],
-    where: { type, transactionDate: { gte: start, lte: end } },
+    where: {
+      type,
+      ...(Object.keys(dateFilter).length > 0
+        ? { transactionDate: dateFilter }
+        : {}),
+    },
     _sum: { amount: true },
     _count: true,
   });

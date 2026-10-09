@@ -18,6 +18,7 @@ class DashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final summaryAsync = ref.watch(dashboardSummaryProvider);
     final expenseAsync = ref.watch(expenseBreakdownProvider);
+    final expenseRange = ref.watch(expenseChartRangeProvider);
     final accountsAsync = ref.watch(accountsProvider);
     final p = context.palette;
 
@@ -171,19 +172,63 @@ class DashboardScreen extends ConsumerWidget {
               const SizedBox(height: 26),
 
               // Expense chart
-              const SectionHeader(
+              SectionHeader(
                 title: 'Detail Pengeluaran',
                 subtitle: 'Distribusi per kategori',
+                action: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: expenseRange.key,
+                    isDense: true,
+                    icon: Icon(Icons.keyboard_arrow_down_rounded, color: p.textMuted),
+                    style: context.texts.labelMedium?.copyWith(
+                      color: p.brand,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'current', child: Text('Bulan ini')),
+                      DropdownMenuItem(value: 'previous', child: Text('Bulan lalu')),
+                      DropdownMenuItem(value: 'three_months', child: Text('3 bulan terakhir')),
+                      DropdownMenuItem(value: 'year', child: Text('Tahun ini')),
+                      DropdownMenuItem(value: 'all', child: Text('Semua histori')),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        ref.read(expenseChartRangeProvider.notifier).state =
+                            ExpenseChartRange.fromKey(value);
+                      }
+                    },
+                  ),
+                ),
               ),
               AppCard(
                 padding: const EdgeInsets.all(18),
                 child: expenseAsync.when(
                   data: (expenses) {
                     if (expenses.isEmpty) {
-                      return const SizedBox(
+                      final isCurrentMonth = expenseRange.key == 'current';
+                      return SizedBox(
                         height: 140,
                         child: Center(
-                          child: Text('Belum ada data pengeluaran.'),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                isCurrentMonth
+                                    ? 'Belum ada pengeluaran bulan ini.'
+                                    : 'Belum ada data pada periode ini.',
+                                textAlign: TextAlign.center,
+                              ),
+                              if (isCurrentMonth)
+                                TextButton.icon(
+                                  onPressed: () {
+                                    ref.read(expenseChartRangeProvider.notifier).state =
+                                        ExpenseChartRange.allHistory;
+                                  },
+                                  icon: const Icon(Icons.history_rounded, size: 17),
+                                  label: const Text('Lihat semua histori'),
+                                ),
+                            ],
+                          ),
                         ),
                       );
                     }

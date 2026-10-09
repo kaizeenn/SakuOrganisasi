@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import '../database/database.dart';
 import '../repositories/transaction_repository.dart';
 import '../models/dashboard_summary.dart';
@@ -36,9 +37,95 @@ final categoriesProvider = FutureProvider<List<Category>>((ref) {
 });
 
 // 7. Expense Breakdown Provider
-final expenseBreakdownProvider = FutureProvider<List<CategoryExpense>>((ref) {
-  return ref.watch(transactionRepositoryProvider).watchExpenseBreakdown();
+final expenseChartRangeProvider = StateProvider<ExpenseChartRange>((ref) {
+  return ExpenseChartRange.currentMonth();
 });
+
+final expenseBreakdownProvider = FutureProvider<List<CategoryExpense>>((ref) {
+  final range = ref.watch(expenseChartRangeProvider);
+  return ref.watch(transactionRepositoryProvider).watchExpenseBreakdown(
+    startDate: range.startDate,
+    endDate: range.endDate,
+    allHistory: range.key == 'all',
+  );
+});
+
+class ExpenseChartRange {
+  final String key;
+  final String label;
+  final DateTime? startDate;
+  final DateTime? endDate;
+
+  const ExpenseChartRange({
+    required this.key,
+    required this.label,
+    this.startDate,
+    this.endDate,
+  });
+
+  factory ExpenseChartRange.currentMonth() {
+    final now = DateTime.now();
+    return ExpenseChartRange(
+      key: 'current',
+      label: DateFormat('MMMM yyyy', 'id_ID').format(now),
+      startDate: DateTime(now.year, now.month, 1),
+      endDate: DateTime(now.year, now.month + 1, 0, 23, 59, 59),
+    );
+  }
+
+  static ExpenseChartRange previousMonth() {
+    final now = DateTime.now();
+    final month = DateTime(now.year, now.month - 1, 1);
+    return ExpenseChartRange(
+      key: 'previous',
+      label: DateFormat('MMMM yyyy', 'id_ID').format(month),
+      startDate: month,
+      endDate: DateTime(month.year, month.month + 1, 0, 23, 59, 59),
+    );
+  }
+
+  static ExpenseChartRange lastThreeMonths() {
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month - 2, 1);
+    return ExpenseChartRange(
+      key: 'three_months',
+      label: '3 bulan terakhir',
+      startDate: start,
+      endDate: DateTime(now.year, now.month + 1, 0, 23, 59, 59),
+    );
+  }
+
+  static ExpenseChartRange currentYear() {
+    final now = DateTime.now();
+    return ExpenseChartRange(
+      key: 'year',
+      label: 'Tahun ${now.year}',
+      startDate: DateTime(now.year, 1, 1),
+      endDate: DateTime(now.year, 12, 31, 23, 59, 59),
+    );
+  }
+
+  static const allHistory = ExpenseChartRange(
+    key: 'all',
+    label: 'Semua histori',
+  );
+
+  static ExpenseChartRange fromKey(String key) {
+    switch (key) {
+      case 'previous':
+        return previousMonth();
+      case 'three_months':
+        return lastThreeMonths();
+      case 'year':
+        return currentYear();
+      case 'all':
+        return allHistory;
+      case 'current':
+      default:
+        return ExpenseChartRange.currentMonth();
+    }
+  }
+}
 
 // 8. Events With Spending Provider
 final eventsWithSpendingProvider =

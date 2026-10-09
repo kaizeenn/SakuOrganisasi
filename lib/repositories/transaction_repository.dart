@@ -562,8 +562,17 @@ class TransactionRepository {
 
   // ============ Expense Breakdown (chart) ============
 
-  Future<List<CategoryExpense>> watchExpenseBreakdown() async {
-    final res = await _api.get('/api/dashboard/by-category', q: {'type': 'Expense'});
+  Future<List<CategoryExpense>> watchExpenseBreakdown({
+    DateTime? startDate,
+    DateTime? endDate,
+    bool allHistory = false,
+  }) async {
+    final res = await _api.get('/api/dashboard/by-category', q: {
+      'type': 'Expense',
+      if (allHistory) 'allHistory': 'true',
+      if (startDate != null) 'startDate': startDate.toUtc().toIso8601String(),
+      if (endDate != null) 'endDate': endDate.toUtc().toIso8601String(),
+    });
     final list = (res['data']['breakdown'] as List)
         .map((e) => CategoryExpense(
               categoryName: (e as Map<String, dynamic>)['category'] as String,
