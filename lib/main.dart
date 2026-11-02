@@ -2,11 +2,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'screens/auth_screen.dart';
+import 'services/api_client.dart';
 import 'providers/theme_provider.dart';
 import 'theme/app_theme.dart';
 
+final navigatorKey = GlobalKey<NavigatorState>();
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  ApiClient.instance.onUnauthorized = () async {
+    final navigator = navigatorKey.currentState;
+    if (navigator == null) return;
+    navigator.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AuthScreen()),
+      (route) => false,
+    );
+  };
 
   runApp(const ProviderScope(child: MyApp()));
 }
@@ -19,6 +31,7 @@ class MyApp extends ConsumerWidget {
     final themeMode = ref.watch(themeProvider);
 
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'Saku Organisasi',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,

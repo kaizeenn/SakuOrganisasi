@@ -29,6 +29,11 @@ class ApiClient {
   static final ApiClient instance = ApiClient._();
 
   String? _cachedToken;
+  bool _handlingUnauthorized = false;
+
+  /// Dipanggil sekali saat server menolak request dengan HTTP 401.
+  /// Main app menggunakannya untuk mengembalikan user ke halaman login.
+  Future<void> Function()? onUnauthorized;
 
   /// Ambil token JWT dari memory cache atau SharedPreferences.
   Future<String?> getToken() async {
@@ -119,6 +124,7 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? body,
     Map<String, String>? queryParams,
+    bool handleUnauthorized = true,
   }) async {
     final uri = Uri.parse('${ApiConfig.baseUrl}$path').replace(
       queryParameters: queryParams?.map((k, v) => MapEntry(k, v.toString())),
@@ -150,16 +156,48 @@ class ApiClient {
       throw ApiException('Respons server tidak valid (status ${res.statusCode})');
     }
 
+    if (res.statusCode == 401 && handleUnauthorized) {
+      await clearAuth();
+      if (!_handlingUnauthorized) {
+        _handlingUnauthorized = true;
+        try {
+          await onUnauthorized?.call();
+        } finally {
+          _handlingUnauthorized = false;
+        }
+      }
+    }
+
     if (res.statusCode >= 400 || json['success'] == false) {
       throw ApiException(json['message']?.toString() ?? 'Permintaan gagal', res.statusCode);
     }
     return json;
   }
 
-  Future<Map<String, dynamic>> get(String path, {Map<String, String>? q}) =>
-      _request('GET', path, queryParams: q);
-  Future<Map<String, dynamic>> post(String path, {Map<String, dynamic>? body}) =>
-      _request('POST', path, body: body);
+  Future<Map<String, dynamic>> get(
+    String path, {
+    Map<String, String>? q,
+    bool handleUnauthorized = true,
+  }) =>
+      _request(
+        'GET',
+        path,
+        queryParams: q,
+        handleUnauthorized: handleUnauthorized,
+      );
+
+  Future<Map<String, dynamic>> post(
+    String path, {
+    Map<String, dynamic>? body,
+    bool handleUnauthorized = true,
+  }) =>
+      _request(
+        'POST',
+        path,
+        body: body,
+        handleUnauthorized: handleUnauthorized,
+      );
+
   Future<Map<String, dynamic>> patch(String path, {Map<String, dynamic>? body}) =>
       _request('PATCH', path, body: body);
   Future<Map<String, dynamic>> delete(String path) => _request('DELETE', path);
@@ -183,10 +221,14 @@ class AuthService {
     required String login,
     required String password,
   }) async {
-    final res = await _api.post('/api/auth/login', body: {
-      'login': login,
-      'password': password,
-    });
+    final res = await _api.post(
+      '/api/auth/login',
+      body: {
+        'login': login,
+        'password': password,
+      },
+      handleUnauthorized: false,
+    );
     final data = res['data'] as Map<String, dynamic>;
     await _api.saveToken(data['token'] as String);
     await _api.saveUser(data['user'] as Map<String, dynamic>);
@@ -199,6 +241,22 @@ class AuthService {
 
   static Future<Map<String, dynamic>?> currentUser() async {
     if (!await _api.isLoggedIn()) return null;
-    return _api.getUser();
+
+    try {
+      final res = await _api.get(
+        '/api/auth/me',
+        handleUnauthorized: false,
+      );
+      final user = (res['data'] as Map<String, dynamic>)['user']
+          as Map<String, dynamic>;
+      await _api.saveUser(user);
+      return user;
+    } on ApiException catch (e) {
+      if (e.statusCode == 401) {
+        await _api.clearAuth();
+        return null;
+      }
+      rethrow;
+    }
   }
 }
