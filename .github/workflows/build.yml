@@ -30,9 +30,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Flutter (stable)
+      - name: Setup Flutter (pinned)
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.6'
           channel: stable
           cache: true
 
