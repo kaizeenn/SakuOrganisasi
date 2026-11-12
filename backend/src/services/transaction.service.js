@@ -15,7 +15,18 @@ const transactionBaseSchema = z.object({
   memberId: z.number().int().positive().nullable().optional(),
 });
 
-const transactionCreateSchema = transactionBaseSchema.refine((d) => {
+// Calendar dates from the mobile app are encoded as UTC midnight (YYYY-MM-DDT00:00:00Z)
+// so the selected day is never shifted by the server's local timezone.
+function normalizeCalendarDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return date;
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+const transactionCreateSchema = transactionBaseSchema.transform((data) => ({
+  ...data,
+  transactionDate: normalizeCalendarDate(data.transactionDate),
+})).refine((d) => {
   if (d.type === 'Transfer') return !!d.transferAccountId && d.transferAccountId !== d.accountId;
   return !d.transferAccountId;
 }, {
@@ -72,6 +83,9 @@ const transactionService = {
 
   async update({ id, data, userId }) {
     const parsed = transactionUpdateSchema.parse(data);
+    if (parsed.transactionDate) {
+      parsed.transactionDate = normalizeCalendarDate(parsed.transactionDate);
+    }
 
     const existing = await prisma.transaction.findUnique({ where: { id } });
     if (!existing) throw ApiError.notFound('Transaksi tidak ditemukan');

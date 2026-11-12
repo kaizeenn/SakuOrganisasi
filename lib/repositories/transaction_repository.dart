@@ -6,6 +6,7 @@
 import '../database/database.dart';
 import '../models/dashboard_summary.dart';
 import '../services/api_client.dart';
+import '../utils/date_utils.dart';
 
 class TransactionWithDetails {
   final Transaction transaction;
@@ -386,8 +387,10 @@ class TransactionRepository {
       'name': name,
       'budgetLimit': budgetLimit,
       'status': status,
-      'startDate': startDate.toUtc().toIso8601String(),
-      'endDate': endDate?.toUtc().toIso8601String(),
+      'startDate': toApiCalendarBoundary(startDate, endOfDay: false),
+      'endDate': endDate == null
+          ? null
+          : toApiCalendarBoundary(endDate, endOfDay: true),
     });
     return _mapEvent(res['data']['event'] as Map<String, dynamic>);
   }
@@ -404,8 +407,8 @@ class TransactionRepository {
       if (name != null) 'name': name,
       if (budgetLimit != null) 'budgetLimit': budgetLimit,
       if (status != null) 'status': status,
-      if (startDate != null) 'startDate': startDate.toUtc().toIso8601String(),
-      if (endDate != null) 'endDate': endDate.toUtc().toIso8601String(),
+      if (startDate != null) 'startDate': toApiCalendarBoundary(startDate, endOfDay: false),
+      if (endDate != null) 'endDate': toApiCalendarBoundary(endDate, endOfDay: true),
     });
   }
 
@@ -486,8 +489,8 @@ class TransactionRepository {
       if (categoryId != null) 'categoryId': categoryId.toString(),
       if (accountId != null) 'accountId': accountId.toString(),
       if (startDate != null)
-        'startDate': startDate.toUtc().toIso8601String(),
-      if (endDate != null) 'endDate': endDate.toUtc().toIso8601String(),
+        'startDate': toApiCalendarBoundary(startDate, endOfDay: false),
+      if (endDate != null) 'endDate': toApiCalendarBoundary(endDate, endOfDay: true),
     };
     final res = await _api.get('/api/transactions', q: q);
     final list = (res['data']['transactions'] as List)
@@ -518,7 +521,7 @@ class TransactionRepository {
     final res = await _api.post('/api/transactions', body: {
       'amount': amount,
       'type': type,
-      'transactionDate': transactionDate.toUtc().toIso8601String(),
+      'transactionDate': toApiCalendarDate(transactionDate),
       'description': description,
       'accountId': accountId,
       'categoryId': categoryId,
@@ -545,7 +548,7 @@ class TransactionRepository {
     await _api.patch('/api/transactions/$id', body: {
       'amount': amount,
       'type': type,
-      'transactionDate': transactionDate.toUtc().toIso8601String(),
+      'transactionDate': toApiCalendarDate(transactionDate),
       'description': description,
       'accountId': accountId,
       'categoryId': categoryId,
@@ -570,8 +573,8 @@ class TransactionRepository {
     final res = await _api.get('/api/dashboard/by-category', q: {
       'type': 'Expense',
       if (allHistory) 'allHistory': 'true',
-      if (startDate != null) 'startDate': startDate.toUtc().toIso8601String(),
-      if (endDate != null) 'endDate': endDate.toUtc().toIso8601String(),
+      if (startDate != null) 'startDate': toApiCalendarBoundary(startDate, endOfDay: false),
+      if (endDate != null) 'endDate': toApiCalendarBoundary(endDate, endOfDay: true),
     });
     final list = (res['data']['breakdown'] as List)
         .map((e) => CategoryExpense(
@@ -600,8 +603,8 @@ class TransactionRepository {
   }) async {
     final res = await _api.post('/api/cash/periods', body: {
       'name': name,
-      'startDate': startDate.toUtc().toIso8601String(),
-      'endDate': endDate.toUtc().toIso8601String(),
+      'startDate': toApiCalendarBoundary(startDate, endOfDay: false),
+      'endDate': toApiCalendarBoundary(endDate, endOfDay: true),
       'status': status,
     });
     return _mapCashPeriod(res['data']['period'] as Map<String, dynamic>);
@@ -616,8 +619,8 @@ class TransactionRepository {
   }) async {
     await _api.patch('/api/cash/periods/$id', body: {
       if (name != null) 'name': name,
-      if (startDate != null) 'startDate': startDate.toUtc().toIso8601String(),
-      if (endDate != null) 'endDate': endDate.toUtc().toIso8601String(),
+      if (startDate != null) 'startDate': toApiCalendarBoundary(startDate, endOfDay: false),
+      if (endDate != null) 'endDate': toApiCalendarBoundary(endDate, endOfDay: true),
       if (status != null) 'status': status,
     });
   }

@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:apk_bendahara/screens/add_transaction_screen.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:apk_bendahara/theme/app_theme.dart';
 
 void main() {
   testWidgets('add transaction screen shows transfer option', (
@@ -18,8 +19,11 @@ void main() {
     await initializeDateFormatting('id_ID');
 
     await tester.pumpWidget(
-      const ProviderScope(
-        child: MaterialApp(home: AddTransactionScreen()),
+      ProviderScope(
+        child: MaterialApp(
+          theme: AppTheme.light,
+          home: const AddTransactionScreen(),
+        ),
       ),
     );
     await tester.pump(const Duration(seconds: 1));
