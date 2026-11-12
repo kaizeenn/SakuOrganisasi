@@ -5,13 +5,12 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Konfigurasi backend.
-/// Saat running di Linux desktop/emulator, backend lokal di host ini.
-/// Saat running di Android emulator, gunakan 10.0.2.2 (alias host loopback).
-/// Saat running di Android device fisik, ganti dengan IP LAN host (mis. 192.168.x.x).
+/// Base URL backend produksi sekarang berada di VPS baru (192.168.0.189).
+/// Bisa di-override via `--dart-define=API_BASE_URL=...`.
 class ApiConfig {
   static const String _envBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://43.156.113.106',
+    defaultValue: 'http://192.168.0.189:9000',
   );
 
   /// Base URL backend. Bisa di-override via `--dart-define=API_BASE_URL=...`.
