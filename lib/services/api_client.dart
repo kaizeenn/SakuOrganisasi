@@ -5,12 +5,12 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Konfigurasi backend.
-/// Base URL backend produksi sekarang berada di VPS baru (192.168.0.189).
+/// Backend produksi diakses lewat HTTPS: https://api-kas.khairil.dev
 /// Bisa di-override via `--dart-define=API_BASE_URL=...`.
 class ApiConfig {
   static const String _envBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://192.168.0.189:9000',
+    defaultValue: 'https://api-kas.khairil.dev',
   );
 
   /// Base URL backend. Bisa di-override via `--dart-define=API_BASE_URL=...`.
